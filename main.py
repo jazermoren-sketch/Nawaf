@@ -40,21 +40,45 @@ async def load_cogs():
 
 @bot.event
 async def on_ready():
+    if getattr(bot, "_commands_synced", False):
+        return
+
+    try:
+        synced = await bot.tree.sync()
+        bot._commands_synced = True
+        print(f"[OK] Synced {len(synced)} global slash commands")
+    except discord.HTTPException as exc:
+        print(f"[ERROR] Slash command sync failed: {exc!r}")
+        raise
+
     print(f"Nawaf logged in as {bot.user} ({bot.user.id})")
     print(f"Connected to {len(bot.guilds)} guild(s)")
 
 
 @bot.tree.command(name="ping", description="Check bot latency")
 async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message(f"🏓 {round(bot.latency * 1000)}ms")
+    await interaction.response.send_message(
+        f"🏓 {round(bot.latency * 1000)}ms",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="test", description="Test Nawaf slash commands")
+async def test(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "✅ Slash Commands ديال Nawaf خدامين مزيان!",
+        ephemeral=True,
+    )
 
 
 async def main():
     init_db()
     await load_cogs()
+
     token = os.getenv("DISCORD_TOKEN")
     if not token:
         raise RuntimeError("DISCORD_TOKEN is missing from .env")
+
     async with bot:
         await bot.start(token)
 
