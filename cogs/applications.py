@@ -1,5 +1,4 @@
 import json
-from typing import Optional
 
 import discord
 from discord import app_commands
@@ -7,16 +6,12 @@ from discord.ext import commands
 
 from database import connect
 
-
 MAX_QUESTIONS = 10
 
 
 def get_types(guild_id: int):
     with connect() as con:
-        return con.execute(
-            "SELECT * FROM application_types WHERE guild_id=? AND enabled=1 ORDER BY id",
-            (guild_id,),
-        ).fetchall()
+        return con.execute("SELECT * FROM application_types WHERE guild_id=? AND enabled=1 ORDER BY id", (guild_id,)).fetchall()
 
 
 def get_type(type_id: int):
@@ -26,19 +21,13 @@ def get_type(type_id: int):
 
 def get_questions(type_id: int):
     with connect() as con:
-        return con.execute(
-            "SELECT * FROM application_questions WHERE type_id=? ORDER BY position",
-            (type_id,),
-        ).fetchall()
+        return con.execute("SELECT * FROM application_questions WHERE type_id=? ORDER BY position", (type_id,)).fetchall()
 
 
 def is_manager(interaction: discord.Interaction) -> bool:
     return bool(
         interaction.guild
-        and (
-            interaction.user.guild_permissions.manage_guild
-            or interaction.user.guild_permissions.administrator
-        )
+        and (interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator)
     )
 
 
@@ -99,10 +88,12 @@ async def process_decision(interaction: discord.Interaction, application_id: int
 
     result_channel_id = app_type["result_channel_id"] if app_type else None
     result_channel = interaction.guild.get_channel(result_channel_id) if result_channel_id else None
-    if result_channel and result_channel.id != interaction.channel.id:
+    if result_channel:
+        result_word = "قبول" if status == "accepted" else "رفض"
+        mention = member.mention if member else f"<@{row['user_id']}>"
         embed = discord.Embed(
             title=f"📝 نتيجة التقديم #{application_id}",
-            description=f"المتقدم: {member.mention if member else f'<@{row[\"user_id\"]}>'}\nالنتيجة: **{'قبول' if status == 'accepted' else 'رفض'}**",
+            description=f"المتقدم: {mention}\nالنتيجة: **{result_word}**",
             color=discord.Color.green() if status == "accepted" else discord.Color.red(),
         )
         if reason:
@@ -142,33 +133,45 @@ class ApplicationReview(discord.ui.View):
         super().__init__(timeout=None)
         self.application_id = application_id
 
-    @discord.ui.button(label="قبول", emoji="✅", style=discord.ButtonStyle.success, custom_id="nawaf:app:accept")
-    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        accept = discord.ui.Button(label="قبول", emoji="✅", style=discord.ButtonStyle.success, custom_id=f"nawaf:app:{application_id}:accept")
+        accept.callback = self.accept
+        self.add_item(accept)
+
+        accept_reason = discord.ui.Button(label="قبول مع سبب", emoji="✅", style=discord.ButtonStyle.success, custom_id=f"nawaf:app:{application_id}:accept_reason")
+        accept_reason.callback = self.accept_reason
+        self.add_item(accept_reason)
+
+        reject = discord.ui.Button(label="رفض", emoji="❌", style=discord.ButtonStyle.danger, custom_id=f"nawaf:app:{application_id}:reject")
+        reject.callback = self.reject
+        self.add_item(reject)
+
+        reject_reason = discord.ui.Button(label="رفض مع سبب", emoji="❌", style=discord.ButtonStyle.danger, custom_id=f"nawaf:app:{application_id}:reject_reason")
+        reject_reason.callback = self.reject_reason
+        self.add_item(reject_reason)
+
+    async def accept(self, interaction: discord.Interaction):
         await process_decision(interaction, self.application_id, "accepted")
 
-    @discord.ui.button(label="قبول مع سبب", emoji="✅", style=discord.ButtonStyle.success, custom_id="nawaf:app:accept_reason")
-    async def accept_reason(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def accept_reason(self, interaction: discord.Interaction):
         await interaction.response.send_modal(ReasonModal(self.application_id, "accepted"))
 
-    @discord.ui.button(label="رفض", emoji="❌", style=discord.ButtonStyle.danger, custom_id="nawaf:app:reject")
-    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def reject(self, interaction: discord.Interaction):
         await process_decision(interaction, self.application_id, "rejected")
 
-    @discord.ui.button(label="رفض مع سبب", emoji="❌", style=discord.ButtonStyle.danger, custom_id="nawaf:app:reject_reason")
-    async def reject_reason(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def reject_reason(self, interaction: discord.Interaction):
         await interaction.response.send_modal(ReasonModal(self.application_id, "rejected"))
 
 
 class DynamicApplicationModal(discord.ui.Modal):
     def __init__(self, cog, type_id: int, questions, start: int = 0):
-        super().__init__(title=(get_type(type_id)["name"] or "التقديم")[:45])
+        app_type = get_type(type_id)
+        super().__init__(title=(app_type["name"] if app_type else "التقديم")[:45])
         self.cog = cog
         self.type_id = type_id
         self.questions = questions
         self.start = start
         self.inputs = []
-        chunk = questions[start:start + 5]
-        for index, question in enumerate(chunk, start=start + 1):
+        for index, question in enumerate(questions[start:start + 5], start=start + 1):
             field = discord.ui.TextInput(
                 label=f"{index}. {question['question']}"[:45],
                 style=discord.TextStyle.paragraph if len(question["question"]) > 35 else discord.TextStyle.short,
@@ -186,21 +189,15 @@ class DynamicApplicationModal(discord.ui.Modal):
 
         next_start = self.start + len(self.inputs)
         if next_start < len(self.questions):
-            await interaction.response.send_modal(
-                DynamicApplicationModal(self.cog, self.type_id, self.questions, next_start)
-            )
-            return
-
-        # Optional image URL because Discord modals cannot directly contain file uploads.
-        await interaction.response.send_modal(ImageModal(self.cog, self.type_id, self.questions))
+            return await interaction.response.send_modal(DynamicApplicationModal(self.cog, self.type_id, self.questions, next_start))
+        await interaction.response.send_modal(ImageModal(self.cog, self.type_id))
 
 
 class ImageModal(discord.ui.Modal):
-    def __init__(self, cog, type_id: int, questions):
+    def __init__(self, cog, type_id: int):
         super().__init__(title="صورة التقديم")
         self.cog = cog
         self.type_id = type_id
-        self.questions = questions
         self.image = discord.ui.TextInput(
             label="رابط الصورة (اختياري)",
             placeholder="https://...",
@@ -219,12 +216,12 @@ class ApplicationTypeView(discord.ui.View):
     def __init__(self, cog, types):
         super().__init__(timeout=None)
         self.cog = cog
-        for row, app_type in enumerate(types[:5]):
+        for position, app_type in enumerate(types[:5]):
             button = discord.ui.Button(
                 label=app_type["name"][:80],
                 style=discord.ButtonStyle.primary,
                 custom_id=f"nawaf:application:type:{app_type['id']}",
-                row=row,
+                row=position,
             )
             button.callback = self.make_callback(app_type["id"])
             self.add_item(button)
@@ -247,7 +244,7 @@ class ApplicationSettingsView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="📝 تعديل العنوان", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="📝 تعديل عنوان الـPanel", style=discord.ButtonStyle.primary, row=0)
     async def title(self, interaction, button):
         async def save(i, value):
             with connect() as con:
@@ -313,14 +310,11 @@ class QuestionsModal(discord.ui.Modal):
             self.add_item(field)
 
     async def on_submit(self, interaction):
-        values = [f.value.strip() for f in self.fields if f.value.strip()]
+        values = [field.value.strip() for field in self.fields if field.value.strip()]
         with connect() as con:
             con.execute("DELETE FROM application_questions WHERE type_id=?", (self.type_id,))
             for position, question in enumerate(values, start=1):
-                con.execute(
-                    "INSERT INTO application_questions(type_id,position,question,required) VALUES(?,?,?,1)",
-                    (self.type_id, position, question),
-                )
+                con.execute("INSERT INTO application_questions(type_id,position,question,required) VALUES(?,?,?,1)", (self.type_id, position, question))
         await interaction.response.send_message(f"✅ تم حفظ {len(values)} سؤال.", ephemeral=True)
 
 
@@ -330,21 +324,19 @@ class Applications(commands.Cog):
         self.drafts = {}
 
     async def cog_load(self):
-        # Re-register review buttons for pending applications after a restart.
         with connect() as con:
             rows = con.execute("SELECT id FROM applications WHERE status='pending'").fetchall()
         for row in rows:
             self.bot.add_view(ApplicationReview(row["id"]))
 
-    async def start_application(self, interaction: discord.Interaction, type_id: int):
+    async def start_application(self, interaction, type_id):
         app_type = get_type(type_id)
         if not app_type or app_type["guild_id"] != interaction.guild.id:
             return await interaction.response.send_message("❌ نوع التقديم غير موجود.", ephemeral=True)
         questions = get_questions(type_id)
         if not questions:
             return await interaction.response.send_message("❌ هاد التقديم ما فيه حتى سؤال. الإدارة خاصها تضبط الأسئلة أولاً.", ephemeral=True)
-        key = (interaction.guild.id, interaction.user.id, type_id)
-        self.drafts[key] = {}
+        self.drafts[(interaction.guild.id, interaction.user.id, type_id)] = {}
         await interaction.response.send_modal(DynamicApplicationModal(self, type_id, questions))
 
     async def finish_application(self, interaction, type_id, answers, image_url):
@@ -356,23 +348,22 @@ class Applications(commands.Cog):
                 "INSERT INTO applications(guild_id,user_id,type_id,answers,image_url) VALUES(?,?,?,?,?)",
                 (interaction.guild.id, interaction.user.id, type_id, json.dumps(answers, ensure_ascii=False), image_url or None),
             )
-            app_id = cur.lastrowid
+            application_id = cur.lastrowid
 
         review_channel = interaction.guild.get_channel(app_type["review_channel_id"]) if app_type["review_channel_id"] else None
         if review_channel:
-            questions = get_questions(type_id)
             embed = discord.Embed(
-                title=f"{app_type['name']} • تقديم #{app_id}",
+                title=f"{app_type['name']} • تقديم #{application_id}",
                 description=f"**المتقدم:** {interaction.user.mention}\n**النوع:** {app_type['name']}",
                 color=discord.Color(app_type["color"] or 0x5865F2),
             )
-            for question in questions:
+            for question in get_questions(type_id):
                 answer = answers.get(str(question["position"]), "—")
                 embed.add_field(name=question["question"], value=answer[:1024], inline=False)
             if image_url:
                 embed.set_image(url=image_url)
-            await review_channel.send(embed=embed, view=ApplicationReview(app_id))
-            self.bot.add_view(ApplicationReview(app_id))
+            await review_channel.send(embed=embed, view=ApplicationReview(application_id))
+            self.bot.add_view(ApplicationReview(application_id))
 
         await interaction.response.send_message("✅ تم إرسال التقديم للإدارة بنجاح.", ephemeral=True)
 
@@ -380,7 +371,6 @@ class Applications(commands.Cog):
         app_type = get_type(type_id)
         if not app_type:
             return await interaction.response.send_message("❌ نوع التقديم غير موجود.", ephemeral=True)
-        channel = interaction.channel
         embed = discord.Embed(
             title=app_type["title"],
             description=app_type["description"],
@@ -388,11 +378,11 @@ class Applications(commands.Cog):
         )
         if app_type["image_url"]:
             embed.set_image(url=app_type["image_url"])
-        await channel.send(embed=embed, view=ApplicationTypeView(self, [app_type]))
+        await interaction.channel.send(embed=embed, view=ApplicationTypeView(self, [app_type]))
         await interaction.response.send_message("✅ تم إرسال Panel التقديم.", ephemeral=True)
 
     @app_commands.command(name="application", description="فتح نظام التقديم", name_localizations={"ar": "تقديم"})
-    async def application(self, interaction: discord.Interaction):
+    async def application(self, interaction):
         types = get_types(interaction.guild.id)
         if not types:
             return await interaction.response.send_message("❌ ما كاين حتى نوع تقديم مفعل. الإدارة خاصها تستعمل `/application-create` أولاً.", ephemeral=True)
@@ -401,21 +391,20 @@ class Applications(commands.Cog):
 
     @app_commands.command(name="application-create", description="إنشاء نوع تقديم جديد")
     @app_commands.check(is_manager)
-    @app_commands.describe(name="اسم التقديم", questions="عدد الأسئلة: 5 أو 7 أو 10")
-    async def create(self, interaction: discord.Interaction, name: str, questions: app_commands.Range[int, 1, 10] = 5):
+    @app_commands.describe(name="اسم التقديم", questions="عدد الأسئلة من 1 إلى 10")
+    async def create(self, interaction, name: str, questions: app_commands.Range[int, 1, 10] = 5):
         with connect() as con:
             cur = con.execute("INSERT INTO application_types(guild_id,name,title,description) VALUES(?,?,?,?)", (interaction.guild.id, name, f"تقديم {name}", "اضغط على الزر لبدء التقديم."))
             type_id = cur.lastrowid
             defaults = ["ما هو اسمك؟", "كم هو عمرك؟", "كم ساعة ناشط باليوم؟", "كيف ستفيد السيرفر؟", "اكتب خبرتك في Discord"]
             for position in range(1, questions + 1):
-                q = defaults[position - 1] if position <= len(defaults) else f"السؤال {position}"
-                con.execute("INSERT INTO application_questions(type_id,position,question,required) VALUES(?,?,?,1)", (type_id, position, q))
+                question = defaults[position - 1] if position <= len(defaults) else f"السؤال {position}"
+                con.execute("INSERT INTO application_questions(type_id,position,question,required) VALUES(?,?,?,1)", (type_id, position, question))
         await interaction.response.send_message(f"✅ تم إنشاء **{name}** (ID: `{type_id}`) بـ {questions} أسئلة. استعمل `/application-settings` لضبطه.", ephemeral=True)
 
     @app_commands.command(name="application-settings", description="فتح إعدادات نوع تقديم")
     @app_commands.check(is_manager)
-    @app_commands.describe(type_id="ID ديال نوع التقديم")
-    async def settings(self, interaction: discord.Interaction, type_id: int):
+    async def settings(self, interaction, type_id: int):
         app_type = get_type(type_id)
         if not app_type or app_type["guild_id"] != interaction.guild.id:
             return await interaction.response.send_message("❌ ID غير صحيح.", ephemeral=True)
@@ -424,28 +413,28 @@ class Applications(commands.Cog):
 
     @app_commands.command(name="application-review-channel", description="تحديد روم مراجعة التقديمات")
     @app_commands.check(is_manager)
-    async def review_channel(self, interaction: discord.Interaction, channel: discord.TextChannel, type_id: int):
+    async def review_channel(self, interaction, channel: discord.TextChannel, type_id: int):
         with connect() as con:
             con.execute("UPDATE application_types SET review_channel_id=? WHERE id=? AND guild_id=?", (channel.id, type_id, interaction.guild.id))
         await interaction.response.send_message(f"✅ روم المراجعة: {channel.mention}", ephemeral=True)
 
     @app_commands.command(name="application-result-channel", description="تحديد روم نتائج التقديم")
     @app_commands.check(is_manager)
-    async def result_channel(self, interaction: discord.Interaction, channel: discord.TextChannel, type_id: int):
+    async def result_channel(self, interaction, channel: discord.TextChannel, type_id: int):
         with connect() as con:
             con.execute("UPDATE application_types SET result_channel_id=? WHERE id=? AND guild_id=?", (channel.id, type_id, interaction.guild.id))
         await interaction.response.send_message(f"✅ روم النتائج: {channel.mention}", ephemeral=True)
 
-    @app_commands.command(name="application-role", description="تحديد الرتبة التي تعطى بعد القبول")
+    @app_commands.command(name="application-role", description="تحديد رتبة تعطى بعد القبول")
     @app_commands.check(is_manager)
-    async def role(self, interaction: discord.Interaction, role: discord.Role, type_id: int):
+    async def role(self, interaction, role: discord.Role, type_id: int):
         with connect() as con:
             con.execute("UPDATE application_types SET accepted_role_id=? WHERE id=? AND guild_id=?", (role.id, type_id, interaction.guild.id))
         await interaction.response.send_message(f"✅ رتبة القبول: {role.mention}", ephemeral=True)
 
     @app_commands.command(name="application-panel", description="إرسال Panel ديال جميع أنواع التقديم")
     @app_commands.check(is_manager)
-    async def panel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+    async def panel(self, interaction, channel: discord.TextChannel):
         types = get_types(interaction.guild.id)
         if not types:
             return await interaction.response.send_message("❌ أنشئ نوع تقديم أولاً باستعمال `/application-create`.", ephemeral=True)
@@ -455,7 +444,7 @@ class Applications(commands.Cog):
 
     @app_commands.command(name="application-list", description="عرض أنواع التقديم")
     @app_commands.check(is_manager)
-    async def listing(self, interaction: discord.Interaction):
+    async def listing(self, interaction):
         types = get_types(interaction.guild.id)
         if not types:
             return await interaction.response.send_message("ما كاين حتى نوع تقديم.", ephemeral=True)
