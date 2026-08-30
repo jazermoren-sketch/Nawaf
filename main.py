@@ -47,6 +47,11 @@ async def on_ready():
         synced = await bot.tree.sync()
         bot._commands_synced = True
         print(f"[OK] Synced {len(synced)} global slash commands")
+
+        applications = bot.get_cog("Applications")
+        if applications:
+            await applications.register_persistent_panels()
+            print("[OK] Registered persistent application panels")
     except discord.HTTPException as exc:
         print(f"[ERROR] Slash command sync failed: {exc!r}")
         raise
@@ -57,18 +62,12 @@ async def on_ready():
 
 @bot.tree.command(name="ping", description="Check bot latency")
 async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        f"🏓 {round(bot.latency * 1000)}ms",
-        ephemeral=True,
-    )
+    await interaction.response.send_message(f"🏓 {round(bot.latency * 1000)}ms", ephemeral=True)
 
 
 @bot.tree.command(name="test", description="Test Nawaf slash commands")
 async def test(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        "✅ Slash Commands ديال Nawaf خدامين مزيان!",
-        ephemeral=True,
-    )
+    await interaction.response.send_message("✅ Slash Commands ديال Nawaf خدامين مزيان!", ephemeral=True)
 
 
 async def main():
