@@ -52,10 +52,35 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
+            type_id INTEGER,
             answers TEXT NOT NULL,
+            image_url TEXT,
             status TEXT DEFAULT 'pending',
             reviewer_id INTEGER,
+            review_reason TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS application_types (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT 'تقديم الإدارة',
+            description TEXT DEFAULT 'اضغط على الزر لبدء التقديم.',
+            color INTEGER DEFAULT 5793266,
+            image_url TEXT,
+            review_channel_id INTEGER,
+            result_channel_id INTEGER,
+            accepted_role_id INTEGER,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS application_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type_id INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            question TEXT NOT NULL,
+            required INTEGER DEFAULT 1,
+            UNIQUE(type_id, position)
         );
         CREATE TABLE IF NOT EXISTS balances (
             guild_id INTEGER NOT NULL,
@@ -92,10 +117,19 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         """)
-        # Safe schema upgrade for databases created by older Nawaf versions.
+
+        # Safe upgrades for databases created by older Nawaf versions.
         columns = {row[1] for row in con.execute("PRAGMA table_info(guild_config)")}
         if "shop_order_channel" not in columns:
             con.execute("ALTER TABLE guild_config ADD COLUMN shop_order_channel INTEGER")
+
+        app_columns = {row[1] for row in con.execute("PRAGMA table_info(applications)")}
+        if "type_id" not in app_columns:
+            con.execute("ALTER TABLE applications ADD COLUMN type_id INTEGER")
+        if "image_url" not in app_columns:
+            con.execute("ALTER TABLE applications ADD COLUMN image_url TEXT")
+        if "review_reason" not in app_columns:
+            con.execute("ALTER TABLE applications ADD COLUMN review_reason TEXT")
 
 
 def ensure_guild(guild_id):
