@@ -3,6 +3,7 @@ import asyncio
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+from database import init_db
 
 load_dotenv()
 
@@ -21,6 +22,7 @@ COGS = (
     "cogs.announcements",
     "cogs.dhikr",
     "cogs.economy",
+    "cogs.shop",
     "cogs.config",
     "cogs.health",
 )
@@ -48,6 +50,7 @@ async def ping(interaction: discord.Interaction):
 
 
 async def main():
+    init_db()
     await load_cogs()
     token = os.getenv("DISCORD_TOKEN")
     if not token:
