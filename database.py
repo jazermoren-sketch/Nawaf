@@ -29,7 +29,8 @@ def init_db():
             ticket_panel_channel INTEGER,
             ticket_panel_message INTEGER,
             application_panel_channel INTEGER,
-            application_panel_message INTEGER
+            application_panel_message INTEGER,
+            shop_order_channel INTEGER
         );
         CREATE TABLE IF NOT EXISTS tickets (
             channel_id INTEGER PRIMARY KEY,
@@ -70,7 +71,31 @@ def init_db():
             content TEXT NOT NULL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS shop_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            price INTEGER NOT NULL,
+            stock INTEGER DEFAULT -1,
+            active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS shop_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
+            total_price INTEGER NOT NULL,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
+        # Safe schema upgrade for databases created by older Nawaf versions.
+        columns = {row[1] for row in con.execute("PRAGMA table_info(guild_config)")}
+        if "shop_order_channel" not in columns:
+            con.execute("ALTER TABLE guild_config ADD COLUMN shop_order_channel INTEGER")
 
 
 def ensure_guild(guild_id):
