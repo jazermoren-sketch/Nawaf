@@ -14,6 +14,11 @@ def get_types(guild_id: int):
         return con.execute("SELECT * FROM application_types WHERE guild_id=? AND enabled=1 ORDER BY id", (guild_id,)).fetchall()
 
 
+def get_all_types():
+    with connect() as con:
+        return con.execute("SELECT * FROM application_types WHERE enabled=1 ORDER BY id").fetchall()
+
+
 def get_type(type_id: int):
     with connect() as con:
         return con.execute("SELECT * FROM application_types WHERE id=?", (type_id,)).fetchone()
@@ -47,13 +52,7 @@ class ReasonModal(discord.ui.Modal):
         super().__init__(title="سبب القرار")
         self.application_id = application_id
         self.status = status
-        self.reason = discord.ui.TextInput(
-            label="اكتب السبب",
-            placeholder="اكتب سبب القبول/الرفض...",
-            style=discord.TextStyle.paragraph,
-            required=True,
-            max_length=1000,
-        )
+        self.reason = discord.ui.TextInput(label="اكتب السبب", placeholder="اكتب سبب القبول/الرفض...", style=discord.TextStyle.paragraph, required=True, max_length=1000)
         self.add_item(self.reason)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -70,10 +69,7 @@ async def process_decision(interaction: discord.Interaction, application_id: int
             return await interaction.response.send_message("❌ التقديم غير موجود.", ephemeral=True)
         if row["status"] != "pending":
             return await interaction.response.send_message("⚠️ هاد التقديم تمت مراجعته من قبل.", ephemeral=True)
-        con.execute(
-            "UPDATE applications SET status=?, reviewer_id=?, review_reason=? WHERE id=?",
-            (status, interaction.user.id, reason, application_id),
-        )
+        con.execute("UPDATE applications SET status=?, reviewer_id=?, review_reason=? WHERE id=?", (status, interaction.user.id, reason, application_id))
 
     member = interaction.guild.get_member(row["user_id"])
     app_type = get_type(row["type_id"]) if row["type_id"] else None
@@ -91,11 +87,7 @@ async def process_decision(interaction: discord.Interaction, application_id: int
     if result_channel:
         result_word = "قبول" if status == "accepted" else "رفض"
         mention = member.mention if member else f"<@{row['user_id']}>"
-        embed = discord.Embed(
-            title=f"📝 نتيجة التقديم #{application_id}",
-            description=f"المتقدم: {mention}\nالنتيجة: **{result_word}**",
-            color=discord.Color.green() if status == "accepted" else discord.Color.red(),
-        )
+        embed = discord.Embed(title=f"📝 نتيجة التقديم #{application_id}", description=f"المتقدم: {mention}\nالنتيجة: **{result_word}**", color=discord.Color.green() if status == "accepted" else discord.Color.red())
         if reason:
             embed.add_field(name="السبب", value=reason, inline=False)
         embed.add_field(name="المراجع", value=interaction.user.mention, inline=True)
@@ -111,10 +103,7 @@ async def process_decision(interaction: discord.Interaction, application_id: int
         except discord.HTTPException:
             pass
 
-    await interaction.response.send_message(
-        f"✅ تم تسجيل {'القبول' if status == 'accepted' else 'الرفض'} للتقديم #{application_id}.",
-        ephemeral=True,
-    )
+    await interaction.response.send_message(f"✅ تم تسجيل {'القبول' if status == 'accepted' else 'الرفض'} للتقديم #{application_id}.", ephemeral=True)
 
     if interaction.message and interaction.message.embeds:
         embed = interaction.message.embeds[0]
@@ -132,33 +121,27 @@ class ApplicationReview(discord.ui.View):
     def __init__(self, application_id: int):
         super().__init__(timeout=None)
         self.application_id = application_id
+        buttons = [
+            ("قبول", "✅", discord.ButtonStyle.success, "accept"),
+            ("قبول مع سبب", "✅", discord.ButtonStyle.success, "accept_reason"),
+            ("رفض", "❌", discord.ButtonStyle.danger, "reject"),
+            ("رفض مع سبب", "❌", discord.ButtonStyle.danger, "reject_reason"),
+        ]
+        for label, emoji, style, action in buttons:
+            button = discord.ui.Button(label=label, emoji=emoji, style=style, custom_id=f"nawaf:app:{application_id}:{action}")
+            button.callback = getattr(self, action)
+            self.add_item(button)
 
-        accept = discord.ui.Button(label="قبول", emoji="✅", style=discord.ButtonStyle.success, custom_id=f"nawaf:app:{application_id}:accept")
-        accept.callback = self.accept
-        self.add_item(accept)
-
-        accept_reason = discord.ui.Button(label="قبول مع سبب", emoji="✅", style=discord.ButtonStyle.success, custom_id=f"nawaf:app:{application_id}:accept_reason")
-        accept_reason.callback = self.accept_reason
-        self.add_item(accept_reason)
-
-        reject = discord.ui.Button(label="رفض", emoji="❌", style=discord.ButtonStyle.danger, custom_id=f"nawaf:app:{application_id}:reject")
-        reject.callback = self.reject
-        self.add_item(reject)
-
-        reject_reason = discord.ui.Button(label="رفض مع سبب", emoji="❌", style=discord.ButtonStyle.danger, custom_id=f"nawaf:app:{application_id}:reject_reason")
-        reject_reason.callback = self.reject_reason
-        self.add_item(reject_reason)
-
-    async def accept(self, interaction: discord.Interaction):
+    async def accept(self, interaction):
         await process_decision(interaction, self.application_id, "accepted")
 
-    async def accept_reason(self, interaction: discord.Interaction):
+    async def accept_reason(self, interaction):
         await interaction.response.send_modal(ReasonModal(self.application_id, "accepted"))
 
-    async def reject(self, interaction: discord.Interaction):
+    async def reject(self, interaction):
         await process_decision(interaction, self.application_id, "rejected")
 
-    async def reject_reason(self, interaction: discord.Interaction):
+    async def reject_reason(self, interaction):
         await interaction.response.send_modal(ReasonModal(self.application_id, "rejected"))
 
 
@@ -186,7 +169,6 @@ class DynamicApplicationModal(discord.ui.Modal):
         draft = self.cog.drafts.setdefault(key, {})
         for offset, field in enumerate(self.inputs):
             draft[str(self.start + offset + 1)] = field.value
-
         next_start = self.start + len(self.inputs)
         if next_start < len(self.questions):
             return await interaction.response.send_modal(DynamicApplicationModal(self.cog, self.type_id, self.questions, next_start))
@@ -198,12 +180,7 @@ class ImageModal(discord.ui.Modal):
         super().__init__(title="صورة التقديم")
         self.cog = cog
         self.type_id = type_id
-        self.image = discord.ui.TextInput(
-            label="رابط الصورة (اختياري)",
-            placeholder="https://...",
-            required=False,
-            max_length=500,
-        )
+        self.image = discord.ui.TextInput(label="رابط الصورة (اختياري)", placeholder="https://...", required=False, max_length=500)
         self.add_item(self.image)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -217,17 +194,12 @@ class ApplicationTypeView(discord.ui.View):
         super().__init__(timeout=None)
         self.cog = cog
         for position, app_type in enumerate(types[:5]):
-            button = discord.ui.Button(
-                label=app_type["name"][:80],
-                style=discord.ButtonStyle.primary,
-                custom_id=f"nawaf:application:type:{app_type['id']}",
-                row=position,
-            )
+            button = discord.ui.Button(label=app_type["name"][:80], style=discord.ButtonStyle.primary, custom_id=f"nawaf:application:type:{app_type['id']}", row=position)
             button.callback = self.make_callback(app_type["id"])
             self.add_item(button)
 
     def make_callback(self, type_id):
-        async def callback(interaction: discord.Interaction):
+        async def callback(interaction):
             await self.cog.start_application(interaction, type_id)
         return callback
 
@@ -299,13 +271,7 @@ class QuestionsModal(discord.ui.Modal):
         current = get_questions(type_id)
         for index in range(MAX_QUESTIONS):
             value = current[index]["question"] if index < len(current) else ""
-            field = discord.ui.TextInput(
-                label=f"السؤال {index + 1}",
-                default=value[:1000],
-                required=False,
-                style=discord.TextStyle.paragraph,
-                max_length=1000,
-            )
+            field = discord.ui.TextInput(label=f"السؤال {index + 1}", default=value[:1000], required=False, style=discord.TextStyle.paragraph, max_length=1000)
             self.fields.append(field)
             self.add_item(field)
 
@@ -329,6 +295,11 @@ class Applications(commands.Cog):
         for row in rows:
             self.bot.add_view(ApplicationReview(row["id"]))
 
+    async def register_persistent_panels(self):
+        types = get_all_types()
+        for start in range(0, len(types), 5):
+            self.bot.add_view(ApplicationTypeView(self, types[start:start + 5]))
+
     async def start_application(self, interaction, type_id):
         app_type = get_type(type_id)
         if not app_type or app_type["guild_id"] != interaction.guild.id:
@@ -344,19 +315,12 @@ class Applications(commands.Cog):
         if not app_type:
             return await interaction.response.send_message("❌ نوع التقديم غير موجود.", ephemeral=True)
         with connect() as con:
-            cur = con.execute(
-                "INSERT INTO applications(guild_id,user_id,type_id,answers,image_url) VALUES(?,?,?,?,?)",
-                (interaction.guild.id, interaction.user.id, type_id, json.dumps(answers, ensure_ascii=False), image_url or None),
-            )
+            cur = con.execute("INSERT INTO applications(guild_id,user_id,type_id,answers,image_url) VALUES(?,?,?,?,?)", (interaction.guild.id, interaction.user.id, type_id, json.dumps(answers, ensure_ascii=False), image_url or None))
             application_id = cur.lastrowid
 
         review_channel = interaction.guild.get_channel(app_type["review_channel_id"]) if app_type["review_channel_id"] else None
         if review_channel:
-            embed = discord.Embed(
-                title=f"{app_type['name']} • تقديم #{application_id}",
-                description=f"**المتقدم:** {interaction.user.mention}\n**النوع:** {app_type['name']}",
-                color=discord.Color(app_type["color"] or 0x5865F2),
-            )
+            embed = discord.Embed(title=f"{app_type['name']} • تقديم #{application_id}", description=f"**المتقدم:** {interaction.user.mention}\n**النوع:** {app_type['name']}", color=discord.Color(app_type["color"] or 0x5865F2))
             for question in get_questions(type_id):
                 answer = answers.get(str(question["position"]), "—")
                 embed.add_field(name=question["question"], value=answer[:1024], inline=False)
@@ -371,17 +335,13 @@ class Applications(commands.Cog):
         app_type = get_type(type_id)
         if not app_type:
             return await interaction.response.send_message("❌ نوع التقديم غير موجود.", ephemeral=True)
-        embed = discord.Embed(
-            title=app_type["title"],
-            description=app_type["description"],
-            color=discord.Color(app_type["color"] or 0x5865F2),
-        )
+        embed = discord.Embed(title=app_type["title"], description=app_type["description"], color=discord.Color(app_type["color"] or 0x5865F2))
         if app_type["image_url"]:
             embed.set_image(url=app_type["image_url"])
         await interaction.channel.send(embed=embed, view=ApplicationTypeView(self, [app_type]))
         await interaction.response.send_message("✅ تم إرسال Panel التقديم.", ephemeral=True)
 
-    @app_commands.command(name="application", description="فتح نظام التقديم", name_localizations={"ar": "تقديم"})
+    @app_commands.command(name="application", description="فتح نظام التقديم")
     async def application(self, interaction):
         types = get_types(interaction.guild.id)
         if not types:
