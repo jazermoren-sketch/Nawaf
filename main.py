@@ -24,6 +24,7 @@ COGS = (
     "cogs.economy",
     "cogs.shop",
     "cogs.config",
+    "cogs.moderation",
     "cogs.health",
 )
 
