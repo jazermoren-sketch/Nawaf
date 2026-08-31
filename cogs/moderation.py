@@ -16,22 +16,62 @@ class Jail(commands.Cog):
     def cog_unload(self):
         self.release_loop.cancel()
 
-    async def jail_member(self, guild: discord.Guild, member: discord.Member, moderator: discord.Member, minutes: int | None):
+    async def _apply_jail_channel_permissions(self, guild: discord.Guild, member: discord.Member, jail_role: discord.Role, jail_channel: discord.abc.GuildChannel):
+        # The jail role denies visibility everywhere and is explicitly allowed only in the configured jail room.
+        for channel in guild.channels:
+            try:
+                if channel.id == jail_channel.id:
+                    await channel.set_permissions(
+                        jail_role,
+                        view_channel=True,
+                        send_messages=True if isinstance(channel, discord.TextChannel) else None,
+                        read_message_history=True if isinstance(channel, discord.TextChannel) else None,
+                        connect=True if isinstance(channel, discord.VoiceChannel) else None,
+                        speak=True if isinstance(channel, discord.VoiceChannel) else None,
+                        reason="Nawaf jail access room",
+                    )
+                else:
+                    await channel.set_permissions(
+                        jail_role,
+                        view_channel=False,
+                        send_messages=False if isinstance(channel, discord.TextChannel) else None,
+                        connect=False if isinstance(channel, discord.VoiceChannel) else None,
+                        reason="Nawaf jail hidden rooms",
+                    )
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+
+    async def jail_member(
+        self,
+        guild: discord.Guild,
+        member: discord.Member,
+        moderator: discord.Member,
+        minutes: int | None,
+    ):
         cfg = get_config(guild.id)
         role_id = cfg["jail_role_id"]
-        if not role_id:
-            return False, "❌ خاص الإدارة تحدد رتبة السجن أولاً باستعمال `/jail-role`."
+        channel_id = cfg["jail_channel_id"]
+        if not role_id or not channel_id:
+            return False, "❌ خاص الإدارة تحدد **رتبة السجن وروم السجن** أولاً باستعمال `/jail-settings`."
+
         jail_role = guild.get_role(role_id)
+        jail_channel = guild.get_channel(channel_id)
         if not jail_role:
             return False, "❌ رتبة السجن المحددة ما بقاتش موجودة."
+        if not jail_channel:
+            return False, "❌ روم السجن المحددة ما بقاتش موجودة."
         if jail_role >= guild.me.top_role:
-            return False, "❌ البوت ما يقدرش يتحكم فرتبة السجن. خاصها تكون تحت رتبة البوت."
+            return False, "❌ رتبة السجن خاصها تكون تحت رتبة البوت."
         if member.id == moderator.id or member.bot:
             return False, "❌ ما يمكنش تسجن هاد العضو."
         if member.top_role >= guild.me.top_role and not member.guild_permissions.administrator:
             return False, "❌ ما عنديش صلاحية كافية على رتبة هاد العضو."
 
-        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat() if minutes else None
+        expires_at = (
+            (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+            if minutes
+            else None
+        )
         previous_roles = [
             role.id
             for role in member.roles
@@ -45,7 +85,8 @@ class Jail(commands.Cog):
             )
 
         removable = [
-            role for role in member.roles
+            role
+            for role in member.roles
             if role != guild.default_role and role < guild.me.top_role and role != jail_role
         ]
         if removable:
@@ -53,10 +94,13 @@ class Jail(commands.Cog):
                 await member.remove_roles(*removable, reason=f"Nawaf jail by {moderator}")
             except discord.HTTPException:
                 pass
+
         try:
             await member.add_roles(jail_role, reason=f"Nawaf jail by {moderator}")
         except discord.HTTPException:
             return False, "❌ ما قدرتش نضيف رتبة السجن للعضو."
+
+        await self._apply_jail_channel_permissions(guild, member, jail_role, jail_channel)
         return True, None
 
     async def unjail_member(self, guild: discord.Guild, member: discord.Member):
@@ -76,6 +120,7 @@ class Jail(commands.Cog):
                 await member.remove_roles(jail_role, reason="Nawaf unjail")
             except discord.HTTPException:
                 pass
+
         try:
             role_ids = json.loads(row["previous_roles"] or "[]")
         except (json.JSONDecodeError, TypeError):
@@ -88,6 +133,12 @@ class Jail(commands.Cog):
             except discord.HTTPException:
                 pass
         return True
+
+    async def perform_jail(self, guild, member, moderator, minutes=None):
+        return await self.jail_member(guild, member, moderator, minutes)
+
+    async def perform_unjail(self, guild, member):
+        return await self.unjail_member(guild, member)
 
     @tasks.loop(seconds=30)
     async def release_loop(self):
@@ -128,6 +179,19 @@ class Moderation(commands.Cog):
             return await interaction.response.send_message("❌ العضو لا يستقبل الرسائل الخاصة.", ephemeral=True)
         await interaction.response.send_message(f"✅ تم إرسال الرسالة الخاصة إلى {member.mention}.", ephemeral=True)
 
+    @app_commands.command(name="jail-settings", description="تحديد رتبة السجن وروم السجن")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def jail_settings(self, interaction: discord.Interaction, role: discord.Role, channel: discord.TextChannel):
+        if role >= interaction.guild.me.top_role:
+            return await interaction.response.send_message("❌ رتبة السجن خاصها تكون تحت رتبة البوت.", ephemeral=True)
+        if channel.guild.id != interaction.guild.id:
+            return await interaction.response.send_message("❌ الروم خاصها تكون من نفس السيرفر.", ephemeral=True)
+        set_config(interaction.guild.id, jail_role_id=role.id, jail_channel_id=channel.id)
+        await interaction.response.send_message(
+            f"✅ إعدادات السجن:\nرتبة السجن: {role.mention}\nروم السجن: {channel.mention}",
+            ephemeral=True,
+        )
+
     @app_commands.command(name="jail-role", description="تحديد رتبة السجن")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def jail_role(self, interaction: discord.Interaction, role: discord.Role):
@@ -135,6 +199,12 @@ class Moderation(commands.Cog):
             return await interaction.response.send_message("❌ رتبة السجن خاصها تكون تحت رتبة البوت.", ephemeral=True)
         set_config(interaction.guild.id, jail_role_id=role.id)
         await interaction.response.send_message(f"✅ رتبة السجن أصبحت: {role.mention}", ephemeral=True)
+
+    @app_commands.command(name="jail-channel", description="تحديد روم السجن")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def jail_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        set_config(interaction.guild.id, jail_channel_id=channel.id)
+        await interaction.response.send_message(f"✅ روم السجن أصبحت: {channel.mention}", ephemeral=True)
 
     @app_commands.command(name="jail", description="سجن عضو مع إمكانية تحديد مدة بالدقائق")
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -150,7 +220,7 @@ class Moderation(commands.Cog):
         duration = f" لمدة **{minutes} دقيقة**" if minutes else " **بدون مدة محددة**"
         await interaction.response.send_message(f"🔒 تم سجن {member.mention}{duration}.")
 
-    @app_commands.command(name="unjail", description="فك السجن عن عضو واسترجاع رتبه القابلة للإدارة")
+    @app_commands.command(name="unjail", description="فك السجن عن عضو واسترجاع رتبه")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def unjail(self, interaction: discord.Interaction, member: discord.Member):
         cog = self.bot.get_cog("Jail")
