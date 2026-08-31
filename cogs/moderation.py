@@ -32,7 +32,11 @@ class Jail(commands.Cog):
             return False, "❌ ما عنديش صلاحية كافية على رتبة هاد العضو."
 
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat() if minutes else None
-        previous_roles = [role.id for role in member.roles if role != guild.default_role and role < guild.me.top_role and role != jail_role]
+        previous_roles = [
+            role.id
+            for role in member.roles
+            if role != guild.default_role and role < guild.me.top_role and role != jail_role
+        ]
         with connect() as con:
             con.execute(
                 "INSERT INTO jails(guild_id,user_id,previous_roles,expires_at,jailed_by) VALUES(?,?,?,?,?) "
@@ -40,7 +44,10 @@ class Jail(commands.Cog):
                 (guild.id, member.id, json.dumps(previous_roles), expires_at, moderator.id),
             )
 
-        removable = [role for role in member.roles if role != guild.default_role and role < guild.me.top_role and role != jail_role]
+        removable = [
+            role for role in member.roles
+            if role != guild.default_role and role < guild.me.top_role and role != jail_role
+        ]
         if removable:
             try:
                 await member.remove_roles(*removable, reason=f"Nawaf jail by {moderator}")
@@ -86,7 +93,9 @@ class Jail(commands.Cog):
     async def release_loop(self):
         now = datetime.now(timezone.utc)
         with connect() as con:
-            rows = con.execute("SELECT guild_id,user_id,expires_at FROM jails WHERE expires_at IS NOT NULL").fetchall()
+            rows = con.execute(
+                "SELECT guild_id,user_id,expires_at FROM jails WHERE expires_at IS NOT NULL"
+            ).fetchall()
         for row in rows:
             try:
                 expired = datetime.fromisoformat(row["expires_at"]) <= now
@@ -119,12 +128,6 @@ class Moderation(commands.Cog):
             return await interaction.response.send_message("❌ العضو لا يستقبل الرسائل الخاصة.", ephemeral=True)
         await interaction.response.send_message(f"✅ تم إرسال الرسالة الخاصة إلى {member.mention}.", ephemeral=True)
 
-    @app_commands.command(name="send", description="إرسال رسالة في روم محدد")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def send(self, interaction: discord.Interaction, channel: discord.TextChannel, message: str):
-        await channel.send(message)
-        await interaction.response.send_message(f"✅ تم إرسال الرسالة في {channel.mention}.", ephemeral=True)
-
     @app_commands.command(name="jail-role", description="تحديد رتبة السجن")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def jail_role(self, interaction: discord.Interaction, role: discord.Role):
@@ -135,7 +138,9 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="jail", description="سجن عضو مع إمكانية تحديد مدة بالدقائق")
     @app_commands.checks.has_permissions(manage_guild=True)
-    async def jail(self, interaction: discord.Interaction, member: discord.Member, minutes: app_commands.Range[int, 1, 10080] | None = None):
+    async def jail(self, interaction: discord.Interaction, member: discord.Member, minutes: int | None = None):
+        if minutes is not None and not 1 <= minutes <= 10080:
+            return await interaction.response.send_message("❌ المدة خاصها تكون بين 1 و10080 دقيقة.", ephemeral=True)
         cog = self.bot.get_cog("Jail")
         if not cog:
             return await interaction.response.send_message("❌ نظام السجن غير محمل.", ephemeral=True)
