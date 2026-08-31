@@ -143,10 +143,12 @@ def init_db():
         );
         """)
 
-        def add_column(table, column, definition):
+        def add_column(table, column, definition, backfill_sql=None):
             columns = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
             if column not in columns:
                 con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+                if backfill_sql:
+                    con.execute(backfill_sql)
 
         add_column("guild_config", "ticket_panel_title", "TEXT DEFAULT '🎫 الدعم الفني'")
         add_column("guild_config", "ticket_panel_description", "TEXT DEFAULT 'اضغط على الزر لفتح تذكرة.'")
@@ -155,7 +157,9 @@ def init_db():
         add_column("applications", "type_id", "INTEGER")
         add_column("applications", "image_url", "TEXT")
         add_column("applications", "review_reason", "TEXT")
-        add_column("tickets", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP")
+        # SQLite does not allow ALTER TABLE ... ADD COLUMN with CURRENT_TIMESTAMP
+        # as a non-constant default. Add the column without a default and backfill it.
+        add_column("tickets", "created_at", "TEXT", "UPDATE tickets SET created_at = COALESCE(closed_at, datetime('now')) WHERE created_at IS NULL")
         add_column("shop_products", "delivery_type", "TEXT DEFAULT 'generic'")
         add_column("shop_products", "role_id", "INTEGER")
         add_column("shop_orders", "details", "TEXT")
