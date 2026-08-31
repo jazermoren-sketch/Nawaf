@@ -32,7 +32,8 @@ class Config(commands.Cog):
         e.add_field(name="Shop Orders", value=f"<#{c['shop_order_channel']}>" if c["shop_order_channel"] else "غير محدد", inline=False)
         e.add_field(name="Shop Products", value=str(products), inline=True)
         e.add_field(name="Level Roles", value=str(rewards), inline=True)
-        e.add_field(name="Jail Role", value=f"<@&{c['jail_role_id']}>" if c["jail_role_id"] else "غير محددة", inline=False)
+        e.add_field(name="Jail Role", value=f"<@&{c['jail_role_id']}>" if c["jail_role_id"] else "غير محددة", inline=True)
+        e.add_field(name="Jail Channel", value=f"<#{c['jail_channel_id']}>" if c["jail_channel_id"] else "غير محدد", inline=True)
         e.add_field(name="Currency", value=f"{c['currency_name']} {c['currency_symbol']}", inline=False)
         await interaction.response.send_message(embed=e, ephemeral=True)
 
