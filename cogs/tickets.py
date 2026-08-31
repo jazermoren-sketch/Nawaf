@@ -9,12 +9,20 @@ def utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def get_config_from_channel(channel_id):
+    with connect() as con:
+        row = con.execute("SELECT guild_id FROM tickets WHERE channel_id=?", (channel_id,)).fetchone()
+    if not row:
+        return 10
+    cfg = get_config(row["guild_id"])
+    return max(1, min(10, int(cfg["ticket_rating_max"] or 10)))
+
+
 class RatingModal(discord.ui.Modal):
     def __init__(self, channel_id):
         super().__init__(title="تقييم التذكرة")
         self.channel_id = channel_id
-        cfg = get_config_from_channel(channel_id)
-        self.max_rating = max(1, min(10, int(cfg or 10)))
+        self.max_rating = get_config_from_channel(channel_id)
         self.rating = discord.ui.TextInput(
             label=f"التقييم من 1 إلى {self.max_rating}",
             min_length=1,
@@ -57,15 +65,6 @@ class RatingModal(discord.ui.Modal):
         await interaction.response.send_message("⭐ شكراً على تقييمك! تم حفظ التقييم.", ephemeral=True)
 
 
-def get_config_from_channel(channel_id):
-    with connect() as con:
-        row = con.execute("SELECT guild_id FROM tickets WHERE channel_id=?", (channel_id,)).fetchone()
-    if not row:
-        return 10
-    cfg = get_config(row["guild_id"])
-    return cfg["ticket_rating_max"] if cfg else 10
-
-
 class CloseView(discord.ui.View):
     def __init__(self, cog):
         super().__init__(timeout=None)
@@ -90,9 +89,15 @@ class RatingButton(discord.ui.View):
     def __init__(self, channel_id):
         super().__init__(timeout=None)
         self.channel_id = channel_id
+        button = discord.ui.Button(
+            label="⭐ تقييم التذكرة",
+            style=discord.ButtonStyle.success,
+            custom_id=f"nawaf:ticket:rating:{channel_id}",
+        )
+        button.callback = self.rate
+        self.add_item(button)
 
-    @discord.ui.button(label="⭐ تقييم التذكرة", style=discord.ButtonStyle.success)
-    async def rate(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def rate(self, interaction: discord.Interaction):
         if interaction.channel_id != self.channel_id:
             return await interaction.response.send_message("❌ زر التقييم غير صالح هنا.", ephemeral=True)
         with connect() as con:
@@ -116,7 +121,9 @@ class Tickets(commands.Cog):
     async def cog_load(self):
         self.bot.add_view(TicketView(self))
         with connect() as con:
-            rows = con.execute("SELECT channel_id FROM tickets WHERE closed_by IS NOT NULL AND rating IS NULL").fetchall()
+            rows = con.execute(
+                "SELECT channel_id FROM tickets WHERE closed_by IS NOT NULL AND rating IS NULL"
+            ).fetchall()
         for row in rows:
             self.bot.add_view(RatingButton(row["channel_id"]))
 
@@ -140,13 +147,18 @@ class Tickets(commands.Cog):
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             interaction.user: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True, attach_files=True
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                attach_files=True,
             ),
         }
         for role in guild.roles:
             if role.permissions.manage_channels:
                 overwrites[role] = discord.PermissionOverwrite(
-                    view_channel=True, send_messages=True, read_message_history=True
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
                 )
 
         channel = await guild.create_text_channel(
@@ -172,7 +184,7 @@ class Tickets(commands.Cog):
     async def close_ticket(self, interaction: discord.Interaction):
         with connect() as con:
             row = con.execute(
-                "SELECT guild_id, owner_id, created_at FROM tickets WHERE channel_id=? AND closed_by IS NULL",
+                "SELECT guild_id, owner_id FROM tickets WHERE channel_id=? AND closed_by IS NULL",
                 (interaction.channel.id,),
             ).fetchone()
             if not row:
@@ -181,27 +193,33 @@ class Tickets(commands.Cog):
                 return await interaction.response.send_message(
                     "❌ صاحب التذكرة لا يمكنه إغلاقها بنفسه.", ephemeral=True
                 )
-            closed_at = utcnow_iso()
             con.execute(
                 "UPDATE tickets SET closed_by=?, closed_at=? WHERE channel_id=?",
-                (interaction.user.id, closed_at, interaction.channel.id),
+                (interaction.user.id, utcnow_iso(), interaction.channel.id),
             )
 
         cfg = get_config(row["guild_id"])
+        rating_view = RatingButton(interaction.channel.id)
         await interaction.channel.send(
             f"🔒 تم إغلاق التذكرة بواسطة {interaction.user.mention}.\n"
             "صاحب التذكرة يمكنه الآن إعطاء التقييم.",
-            view=RatingButton(interaction.channel.id),
+            view=rating_view,
         )
-        self.bot.add_view(RatingButton(interaction.channel.id))
+        self.bot.add_view(rating_view)
 
-        log_channel = interaction.guild.get_channel(cfg["ticket_log_channel"]) if cfg["ticket_log_channel"] else None
-        if log_channel:
-            embed = discord.Embed(title="🎫 Ticket Closed", color=discord.Color.orange(), timestamp=discord.utils.utcnow())
+        log_channel = guild_channel = None
+        if cfg["ticket_log_channel"]:
+            guild_channel = interaction.guild.get_channel(cfg["ticket_log_channel"])
+        if guild_channel:
+            embed = discord.Embed(
+                title="🎫 Ticket Closed",
+                color=discord.Color.orange(),
+                timestamp=discord.utils.utcnow(),
+            )
             embed.add_field(name="صاحب التذكرة", value=f"<@{row['owner_id']}>", inline=True)
             embed.add_field(name="أغلقها", value=interaction.user.mention, inline=True)
             embed.add_field(name="الروم", value=interaction.channel.mention, inline=True)
-            await log_channel.send(embed=embed)
+            await guild_channel.send(embed=embed)
 
         await interaction.response.send_message("✅ تم إغلاق التذكرة وتفعيل التقييم.", ephemeral=True)
 
