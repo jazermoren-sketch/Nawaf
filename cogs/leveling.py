@@ -37,7 +37,6 @@ class Leveling(commands.Cog):
 
         key = (message.guild.id, message.author.id)
         now = time.monotonic()
-        # Give XP at most once every 30 seconds per member to avoid message-spam farming.
         if now - self.last_xp.get(key, 0) < 30:
             return
         self.last_xp[key] = now
@@ -105,6 +104,23 @@ class Leveling(commands.Cog):
             )
         await interaction.response.send_message(
             f"✅ منين يوصل العضو للمستوى **{level}** غادي ياخذ {role.mention}.", ephemeral=True
+        )
+
+    @app_commands.command(name="level-image-role", description="تحديد رتبة الصور التي تُعطى عند مستوى معين")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def image_role(self, interaction: discord.Interaction, level: app_commands.Range[int, 1, 1000], role: discord.Role):
+        if role >= interaction.guild.me.top_role:
+            return await interaction.response.send_message(
+                "❌ البوت ما يقدرش يعطي هاد الرتبة. خاص رتبة البوت تكون فوقها.", ephemeral=True
+            )
+        with connect() as con:
+            con.execute(
+                "INSERT INTO level_rewards(guild_id,level,role_id,enabled) VALUES(?,?,?,1) "
+                "ON CONFLICT(guild_id,level) DO UPDATE SET role_id=excluded.role_id,enabled=1",
+                (interaction.guild.id, level, role.id),
+            )
+        await interaction.response.send_message(
+            f"✅ رتبة الصور {role.mention} غادي تتعطى تلقائياً منين يوصل العضو للمستوى **{level}**.", ephemeral=True
         )
 
     @app_commands.command(name="level-reward-remove", description="حذف رتبة مرتبطة بمستوى")
