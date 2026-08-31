@@ -62,7 +62,21 @@ class RatingModal(discord.ui.Modal):
                 "UPDATE tickets SET rating=?, note=? WHERE channel_id=?",
                 (value, self.note.value.strip() or None, self.channel_id),
             )
-        await interaction.response.send_message("⭐ شكراً على تقييمك! تم حفظ التقييم.", ephemeral=True)
+        await interaction.response.send_message("⭐ شكراً على تقييمك! تم حفظ التقييم والملاحظة.", ephemeral=True)
+
+
+class DeleteTicketView(discord.ui.View):
+    def __init__(self, cog):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+    @discord.ui.button(label="🗑️ حذف التذكرة", style=discord.ButtonStyle.danger, custom_id="nawaf:ticket:delete")
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not isinstance(interaction.user, discord.Member) or not (
+            interaction.user.guild_permissions.manage_channels or interaction.user.guild_permissions.administrator
+        ):
+            return await interaction.response.send_message("❌ غير الإداري يقدر يحذف التذكرة.", ephemeral=True)
+        await self.cog.delete_ticket(interaction)
 
 
 class CloseView(discord.ui.View):
@@ -73,6 +87,14 @@ class CloseView(discord.ui.View):
     @discord.ui.button(label="🔒 إغلاق التذكرة", style=discord.ButtonStyle.danger, custom_id="nawaf:ticket:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.close_ticket(interaction)
+
+    @discord.ui.button(label="🗑️ حذف التذكرة", style=discord.ButtonStyle.secondary, custom_id="nawaf:ticket:delete")
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not isinstance(interaction.user, discord.Member) or not (
+            interaction.user.guild_permissions.manage_channels or interaction.user.guild_permissions.administrator
+        ):
+            return await interaction.response.send_message("❌ غير الإداري يقدر يحذف التذكرة.", ephemeral=True)
+        await self.cog.delete_ticket(interaction)
 
 
 class TicketView(discord.ui.View):
@@ -96,6 +118,14 @@ class RatingButton(discord.ui.View):
         )
         button.callback = self.rate
         self.add_item(button)
+        self.delete_view = DeleteTicketViewProxy(channel_id)
+        delete_button = discord.ui.Button(
+            label="🗑️ حذف التذكرة",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"nawaf:ticket:delete:{channel_id}",
+        )
+        delete_button.callback = self.delete_ticket
+        self.add_item(delete_button)
 
     async def rate(self, interaction: discord.Interaction):
         if interaction.channel_id != self.channel_id:
@@ -113,6 +143,26 @@ class RatingButton(discord.ui.View):
             return await interaction.response.send_message("⚠️ سبق لك تقييم هذه التذكرة.", ephemeral=True)
         await interaction.response.send_modal(RatingModal(self.channel_id))
 
+    async def delete_ticket(self, interaction: discord.Interaction):
+        if not isinstance(interaction.user, discord.Member) or not (
+            interaction.user.guild_permissions.manage_channels or interaction.user.guild_permissions.administrator
+        ):
+            return await interaction.response.send_message("❌ غير الإداري يقدر يحذف التذكرة.", ephemeral=True)
+        with connect() as con:
+            row = con.execute("SELECT channel_id FROM tickets WHERE channel_id=?", (self.channel_id,)).fetchone()
+            if not row:
+                return await interaction.response.send_message("❌ التذكرة غير موجودة في قاعدة البيانات.", ephemeral=True)
+            con.execute("DELETE FROM tickets WHERE channel_id=?", (self.channel_id,))
+        try:
+            await interaction.channel.delete(reason=f"Ticket deleted by {interaction.user}")
+        except discord.HTTPException:
+            await interaction.response.send_message("❌ ما قدرتش نحذف روم التذكرة.", ephemeral=True)
+
+
+class DeleteTicketViewProxy:
+    def __init__(self, channel_id):
+        self.channel_id = channel_id
+
 
 class Tickets(commands.Cog):
     def __init__(self, bot):
@@ -120,6 +170,7 @@ class Tickets(commands.Cog):
 
     async def cog_load(self):
         self.bot.add_view(TicketView(self))
+        self.bot.add_view(CloseView(self))
         with connect() as con:
             rows = con.execute(
                 "SELECT channel_id FROM tickets WHERE closed_by IS NOT NULL AND rating IS NULL"
@@ -202,15 +253,13 @@ class Tickets(commands.Cog):
         rating_view = RatingButton(interaction.channel.id)
         await interaction.channel.send(
             f"🔒 تم إغلاق التذكرة بواسطة {interaction.user.mention}.\n"
-            "صاحب التذكرة يمكنه الآن إعطاء التقييم.",
+            "صاحب التذكرة يقدر الآن يكتب `-تقييم` أو يستعمل زر التقييم.",
             view=rating_view,
         )
         self.bot.add_view(rating_view)
 
-        log_channel = guild_channel = None
-        if cfg["ticket_log_channel"]:
-            guild_channel = interaction.guild.get_channel(cfg["ticket_log_channel"])
-        if guild_channel:
+        log_channel = interaction.guild.get_channel(cfg["ticket_log_channel"]) if cfg["ticket_log_channel"] else None
+        if log_channel:
             embed = discord.Embed(
                 title="🎫 Ticket Closed",
                 color=discord.Color.orange(),
@@ -219,9 +268,21 @@ class Tickets(commands.Cog):
             embed.add_field(name="صاحب التذكرة", value=f"<@{row['owner_id']}>", inline=True)
             embed.add_field(name="أغلقها", value=interaction.user.mention, inline=True)
             embed.add_field(name="الروم", value=interaction.channel.mention, inline=True)
-            await guild_channel.send(embed=embed)
+            await log_channel.send(embed=embed)
 
         await interaction.response.send_message("✅ تم إغلاق التذكرة وتفعيل التقييم.", ephemeral=True)
+
+    async def delete_ticket(self, interaction: discord.Interaction):
+        if not isinstance(interaction.user, discord.Member) or not (
+            interaction.user.guild_permissions.manage_channels or interaction.user.guild_permissions.administrator
+        ):
+            return await interaction.response.send_message("❌ غير الإداري يقدر يحذف التذكرة.", ephemeral=True)
+        with connect() as con:
+            exists = con.execute("SELECT channel_id FROM tickets WHERE channel_id=?", (interaction.channel.id,)).fetchone()
+            if not exists:
+                return await interaction.response.send_message("❌ هاد الروم ماشي تذكرة.", ephemeral=True)
+            con.execute("DELETE FROM tickets WHERE channel_id=?", (interaction.channel.id,))
+        await interaction.channel.delete(reason=f"Ticket deleted by {interaction.user}")
 
     @app_commands.command(name="ticket-panel", description="إرسال Panel فتح التذاكر")
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -272,6 +333,11 @@ class Tickets(commands.Cog):
     async def category(self, interaction: discord.Interaction, category: discord.CategoryChannel):
         set_config(interaction.guild.id, ticket_category=category.id)
         await interaction.response.send_message(f"✅ Category: {category.name}", ephemeral=True)
+
+    @app_commands.command(name="ticket-delete", description="حذف التذكرة الحالية — للإدارة فقط")
+    @app_commands.checks.has_permissions(manage_channels=True)
+    async def delete_command(self, interaction: discord.Interaction):
+        await self.delete_ticket(interaction)
 
 
 async def setup(bot):
