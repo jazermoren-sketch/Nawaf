@@ -35,7 +35,8 @@ def init_db():
             application_panel_channel INTEGER,
             application_panel_message INTEGER,
             shop_order_channel INTEGER,
-            jail_role_id INTEGER
+            jail_role_id INTEGER,
+            jail_channel_id INTEGER
         );
         CREATE TABLE IF NOT EXISTS tickets (
             channel_id INTEGER PRIMARY KEY,
@@ -143,28 +144,31 @@ def init_db():
         );
         """)
 
-        def add_column(table, column, definition, backfill_sql=None):
+        def add_column(table, column, definition):
             columns = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
             if column not in columns:
                 con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-                if backfill_sql:
-                    con.execute(backfill_sql)
 
-        add_column("guild_config", "ticket_panel_title", "TEXT DEFAULT '🎫 الدعم الفني'")
-        add_column("guild_config", "ticket_panel_description", "TEXT DEFAULT 'اضغط على الزر لفتح تذكرة.'")
-        add_column("guild_config", "ticket_rating_max", "INTEGER DEFAULT 10")
+        # SQLite does not allow CURRENT_TIMESTAMP as a default in ALTER TABLE.
+        # New columns that need a timestamp are therefore added without a
+        # non-constant default, then populated explicitly for old rows.
+        add_column("guild_config", "ticket_panel_title", "TEXT")
+        add_column("guild_config", "ticket_panel_description", "TEXT")
+        add_column("guild_config", "ticket_rating_max", "INTEGER")
         add_column("guild_config", "jail_role_id", "INTEGER")
+        add_column("guild_config", "jail_channel_id", "INTEGER")
         add_column("applications", "type_id", "INTEGER")
         add_column("applications", "image_url", "TEXT")
         add_column("applications", "review_reason", "TEXT")
-        # SQLite does not allow ALTER TABLE ... ADD COLUMN with CURRENT_TIMESTAMP
-        # as a non-constant default. Add the column without a default and backfill it.
-        add_column("tickets", "created_at", "TEXT", "UPDATE tickets SET created_at = COALESCE(closed_at, datetime('now')) WHERE created_at IS NULL")
-        add_column("shop_products", "delivery_type", "TEXT DEFAULT 'generic'")
+        add_column("tickets", "created_at", "TEXT")
+        add_column("shop_products", "delivery_type", "TEXT")
         add_column("shop_products", "role_id", "INTEGER")
         add_column("shop_orders", "details", "TEXT")
 
+        con.execute("UPDATE guild_config SET ticket_panel_title='🎫 الدعم الفني' WHERE ticket_panel_title IS NULL")
+        con.execute("UPDATE guild_config SET ticket_panel_description='اضغط على الزر لفتح تذكرة.' WHERE ticket_panel_description IS NULL")
         con.execute("UPDATE guild_config SET ticket_rating_max=10 WHERE ticket_rating_max IS NULL OR ticket_rating_max < 1")
+        con.execute("UPDATE tickets SET created_at=CURRENT_TIMESTAMP WHERE created_at IS NULL")
         con.execute("UPDATE shop_products SET delivery_type='generic' WHERE delivery_type IS NULL OR delivery_type=''")
 
 
