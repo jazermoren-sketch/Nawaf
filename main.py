@@ -11,7 +11,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=("!", "C"), intents=intents, case_insensitive=True)
 
 COGS = (
     "cogs.permissions",
@@ -25,6 +25,7 @@ COGS = (
     "cogs.shop",
     "cogs.config",
     "cogs.moderation",
+    "cogs.prefix_systems",
     "cogs.health",
 )
 
@@ -59,6 +60,13 @@ async def on_ready():
 
     print(f"Nawaf logged in as {bot.user} ({bot.user.id})")
     print(f"Connected to {len(bot.guilds)} guild(s)")
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+    await bot.process_commands(message)
 
 
 @bot.tree.command(name="ping", description="Check bot latency")
