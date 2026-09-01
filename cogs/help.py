@@ -80,12 +80,10 @@ class Help(commands.Cog):
         for command in sorted(self.bot.tree.get_commands(), key=lambda item: item.name):
             name = f"/{command.qualified_name}"
             description = command.description or "بدون وصف"
-            text = f"{name} — {description}"
-
             lower = command.qualified_name.lower()
             if any(word in lower for word in ("balance", "pay", "currency", "shop")):
                 category = "💰 الاقتصاد"
-            elif any(word in lower for word in ("game", "coinflip", "solo-dice", "rps", "points")):
+            elif any(word in lower for word in ("game", "game-channels", "coinflip", "solo-dice", "rps", "points")):
                 category = "🎮 الألعاب"
             elif any(word in lower for word in ("ticket", "application")):
                 category = "🎫 التذاكر والتقديم"
@@ -95,7 +93,6 @@ class Help(commands.Cog):
                 category = "📈 المستوى والرسائل"
             else:
                 category = "⚙️ الإعدادات والأدوات"
-
             categories[category].append((name, description))
 
         return categories
@@ -122,15 +119,18 @@ class Help(commands.Cog):
         for category, commands_list in categories.items():
             if not commands_list:
                 continue
-            embed = discord.Embed(title=f"{category}", color=discord.Color.blurple())
-            lines = [f"`{name}` — {description}" for name, description in commands_list]
-            chunks = [lines[i : i + 12] for i in range(0, len(lines), 12)]
+            chunks = [commands_list[i : i + 12] for i in range(0, len(commands_list), 12)]
             for chunk_index, chunk in enumerate(chunks, start=1):
-                name = category if len(chunks) == 1 else f"{category} — {chunk_index}"
-                embed.add_field(name=name, value="\n".join(chunk), inline=False)
-                if chunk_index != len(chunks):
-                    break
-            pages.append(embed)
+                embed = discord.Embed(
+                    title=category if len(chunks) == 1 else f"{category} — {chunk_index}",
+                    color=discord.Color.blurple(),
+                )
+                embed.add_field(
+                    name="الأوامر",
+                    value="\n".join(f"`{name}` — {description}" for name, description in chunk),
+                    inline=False,
+                )
+                pages.append(embed)
 
         prefix_embed = discord.Embed(title="💬 Prefix Commands", color=discord.Color.dark_gold())
         for category, command_list in PREFIX_COMMANDS.items():
@@ -154,3 +154,7 @@ class Help(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Help(bot))
+    # main.py loads this cog after the existing game systems, so these addons are ready before slash sync.
+    for extension in ("cogs.roulette_visual", "cogs.game_channels", "cogs.game_restrictions"):
+        if extension not in bot.extensions:
+            await bot.load_extension(extension)
