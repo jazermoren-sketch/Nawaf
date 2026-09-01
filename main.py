@@ -30,7 +30,7 @@ COGS = (
     "cogs.game_channels",
     "cogs.dice_upgrade",
     "cogs.game_restrictions",
-    "cogs.roulette_fizbo_style",
+    "cogs.roulette_multi_message",
     "cogs.roulette_prefix_guard",
     "cogs.help",
     "cogs.admin_prefix",
