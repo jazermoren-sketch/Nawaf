@@ -26,13 +26,75 @@ class GameSession:
     players: list[int] = field(default_factory=list)
 
 
+class GameLobbyView(discord.ui.View):
+    def __init__(self, games: "Games", guild_id: int, channel_id: int):
+        super().__init__(timeout=None)
+        self.games = games
+        self.key = (guild_id, channel_id)
+
+    async def update_lobby(self, interaction: discord.Interaction, session: GameSession):
+        spec = GROUP_GAMES[session.game_type]
+        players = ", ".join(f"<@{uid}>" for uid in session.players)
+        text = (
+            f"🎮 **{spec['name']}**\n"
+            f"👥 اللاعبين: **{len(session.players)}/{session.max_players}**\n"
+            f"📌 الحد الأدنى: **{session.min_players}**\n"
+            f"🏆 الفائز يحصل على **{session.reward} نقطة**.\n\n"
+            f"**اللاعبون:** {players}\n\n"
+            "اضغط على الزر للدخول أو الخروج من اللعبة.\n"
+            "الإدارة أو مشغل اللعبة يستعمل `!ابدأ` لبدء الجولة."
+        )
+        await interaction.response.edit_message(content=text, view=self)
+
+    @discord.ui.button(label="دخول إلى اللعبة", style=discord.ButtonStyle.success, emoji="🎮")
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        session = self.games.sessions.get(self.key)
+        if not session:
+            return await interaction.response.send_message("❌ اللعبة سالات أو ما بقاتش مفتوحة.", ephemeral=True)
+        if interaction.user.id in session.players:
+            return await interaction.response.send_message("⚠️ أنت داخل اللعبة أصلاً.", ephemeral=True)
+        if len(session.players) >= session.max_players:
+            return await interaction.response.send_message(
+                f"❌ اللعبة عامرة. الحد الأقصى هو {session.max_players} لاعب.", ephemeral=True
+            )
+        session.players.append(interaction.user.id)
+        await self.update_lobby(interaction, session)
+
+    @discord.ui.button(label="خروج من اللعبة", style=discord.ButtonStyle.danger, emoji="🚪")
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        session = self.games.sessions.get(self.key)
+        if not session:
+            return await interaction.response.send_message("❌ اللعبة سالات أو ما بقاتش مفتوحة.", ephemeral=True)
+        if interaction.user.id not in session.players:
+            return await interaction.response.send_message("❌ أنت ماشي داخل اللعبة.", ephemeral=True)
+        if interaction.user.id == session.starter_id:
+            return await interaction.response.send_message(
+                "❌ مشغل اللعبة ما يقدرش يخرج؛ استعمل `!انهاء`.", ephemeral=True
+            )
+        session.players.remove(interaction.user.id)
+        await self.update_lobby(interaction, session)
+
+
 class Games(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.sessions: dict[tuple[int, int], GameSession] = {}
 
-    async def _reply(self, message: discord.Message, content: str):
-        return await message.reply(content, mention_author=False)
+    async def _reply(self, message: discord.Message, content: str, **kwargs):
+        return await message.reply(content, mention_author=False, **kwargs)
+
+    def lobby_text(self, session: GameSession):
+        spec = GROUP_GAMES[session.game_type]
+        players = ", ".join(f"<@{uid}>" for uid in session.players)
+        return (
+            f"🎮 **{spec['name']}**\n"
+            f"👥 اللاعبين: **{len(session.players)}/{session.max_players}**\n"
+            f"📌 الحد الأدنى: **{session.min_players}**\n"
+            f"🏆 الفائز يحصل على **{session.reward} نقطة**.\n\n"
+            f"**اللاعبون:** {players}\n\n"
+            "اضغط على الزر للدخول أو الخروج من اللعبة.\n"
+            "الإدارة أو مشغل اللعبة يستعمل `!ابدأ` لبدء الجولة."
+        )
 
     def add_points(self, guild_id: int, user_id: int, amount: int):
         with connect() as con:
@@ -65,18 +127,19 @@ class Games(commands.Cog):
         self.sessions.pop((session.guild_id, session.channel_id), None)
         return f"{result}\n\n🏆 الفائز: <@{winner_id}>\n⭐ ربح **{session.reward} نقطة**."
 
+    async def send_lobby(self, channel: discord.abc.Messageable, session: GameSession):
+        view = GameLobbyView(self, session.guild_id, session.channel_id)
+        return await channel.send(self.lobby_text(session), view=view)
+
     @app_commands.command(name="game-start", description="تشغيل لعبة جماعية للأعضاء")
     @app_commands.checks.has_permissions(manage_guild=True)
-    @app_commands.choices(game=[
-        app_commands.Choice(name="الروليت", value="roulette"),
-        app_commands.Choice(name="معركة النرد", value="dice_battle"),
-    ])
+    @app_commands.choices(game=[app_commands.Choice(name="الروليت", value="roulette"), app_commands.Choice(name="معركة النرد", value="dice_battle")])
     async def game_start(self, interaction: discord.Interaction, game: app_commands.Choice[str], reward: app_commands.Range[int, 0, 1000] = 5, max_players: app_commands.Range[int, 2, 15] = 15):
         session, error = self.start_session(interaction.guild, interaction.channel.id, interaction.user.id, game.value, reward, max_players)
         if error:
             return await interaction.response.send_message(error, ephemeral=True)
-        spec = GROUP_GAMES[game.value]
-        await interaction.response.send_message(f"🎮 **{spec['name']}** بدأت!\n👥 اللاعبين: **1/{session.max_players}**\n📌 الحد الأدنى: **{session.min_players}**\n🏆 الفائز يحصل على **{reward} نقطة**.\n\nاكتب `!دخول` للدخول، و`!ابدأ` لبدء الجولة.")
+        await interaction.response.send_message("🎮 جاري تجهيز لوبي اللعبة...")
+        await self.send_lobby(interaction.channel, session)
 
     @app_commands.command(name="game-join", description="الدخول في اللعبة الجماعية الحالية")
     async def game_join(self, interaction: discord.Interaction):
@@ -96,7 +159,7 @@ class Games(commands.Cog):
         key = (interaction.guild.id, interaction.channel.id)
         session = self.sessions.get(key)
         if not session or interaction.user.id not in session.players:
-            return await interaction.response.send_message("❌ ما نتايش داخل لعبة جماعية هنا.", ephemeral=True)
+            return await interaction.response.send_message("❌ ما نتايش داخل اللعبة الجماعية هنا.", ephemeral=True)
         if interaction.user.id == session.starter_id:
             return await interaction.response.send_message("❌ مشغل اللعبة ما يقدرش يخرج؛ استعمل `/game-end`.", ephemeral=True)
         session.players.remove(interaction.user.id)
@@ -134,8 +197,7 @@ class Games(commands.Cog):
         session, error = self.start_session(message.guild, message.channel.id, message.author.id, game_type, reward, maximum)
         if error:
             return await self._reply(message, error)
-        spec = GROUP_GAMES[game_type]
-        await self._reply(message, f"🎮 **{spec['name']}** بدأت!\n👥 اللاعبين: **1/{session.max_players}**\n📌 الحد الأدنى: **{session.min_players}**\n🏆 الفائز يحصل على **{reward} نقطة**.\n\n`!دخول` للدخول — `!خروج` للخروج — `!ابدأ` لبدء الجولة.")
+        await self.send_lobby(message.channel, session)
 
     async def _prefix_join(self, message: discord.Message):
         session = self.sessions.get((message.guild.id, message.channel.id))
