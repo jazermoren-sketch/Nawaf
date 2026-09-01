@@ -67,24 +67,8 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    prefix_systems = bot.get_cog("PrefixSystems")
-    if prefix_systems:
-        try:
-            handled = await prefix_systems.handle_message(message)
-            if handled:
-                return
-        except Exception as exc:
-            print(f"[ERROR] Prefix handler failed: {exc!r}")
-            if message.guild:
-                try:
-                    await message.reply(
-                        "❌ وقع خطأ أثناء معالجة الأمر. حاول مرة أخرى.",
-                        mention_author=False,
-                    )
-                except discord.HTTPException:
-                    pass
-                return
-
+    # PrefixSystems has its own on_message listener. Do not call handle_message
+    # here as well, otherwise every prefix command is processed twice.
     await bot.process_commands(message)
 
 
