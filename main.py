@@ -26,6 +26,7 @@ COGS = (
     "cogs.config",
     "cogs.moderation",
     "cogs.prefix_systems",
+    "cogs.games",
     "cogs.health",
 )
 
@@ -66,9 +67,6 @@ async def on_ready():
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
-
-    # PrefixSystems has its own on_message listener. Do not call handle_message
-    # here as well, otherwise every prefix command is processed twice.
     await bot.process_commands(message)
 
 
