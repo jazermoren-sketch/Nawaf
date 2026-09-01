@@ -48,9 +48,7 @@ class RatingView(discord.ui.View):
     async def rating(self, interaction: discord.Interaction, select: discord.ui.Select):
         value = int(select.values[0])
         if value > self.max_rating:
-            return await interaction.response.send_message(
-                f"❌ التقييم الأقصى هو {self.max_rating}.", ephemeral=True
-            )
+            return await interaction.response.send_message(f"❌ التقييم الأقصى هو {self.max_rating}.", ephemeral=True)
         self.selected = value
         await interaction.response.send_modal(RatingNoteModal(self))
 
@@ -127,10 +125,7 @@ class PrefixSystems(commands.Cog):
 
     async def show_balance(self, message: discord.Message, member: discord.Member):
         with connect() as con:
-            row = con.execute(
-                "SELECT balance FROM balances WHERE guild_id=? AND user_id=?",
-                (message.guild.id, member.id),
-            ).fetchone()
+            row = con.execute("SELECT balance FROM balances WHERE guild_id=? AND user_id=?", (message.guild.id, member.id)).fetchone()
             balance = row["balance"] if row else 0
         await self._reply(message, f"**{member.name}،رصيدك الحالي هو `{balance}$`.🏦**")
 
@@ -145,10 +140,7 @@ class PrefixSystems(commands.Cog):
             await self._reply(message, "❌ ما يمكنش تحول لنفسك أو لبوت.")
             return
         with connect() as con:
-            row = con.execute(
-                "SELECT balance FROM balances WHERE guild_id=? AND user_id=?",
-                (guild.id, sender.id),
-            ).fetchone()
+            row = con.execute("SELECT balance FROM balances WHERE guild_id=? AND user_id=?", (guild.id, sender.id)).fetchone()
             sender_balance = row["balance"] if row else 0
         if sender_balance < amount:
             await self._reply(message, "❌ رصيدك غير كافي لإتمام التحويل.")
@@ -158,11 +150,7 @@ class PrefixSystems(commands.Cog):
         try:
             code = generate_code()
             file = build_code_image(code)
-            verification_message = await message.reply(
-                "🔐 **تحقق من عملية التحويل**\nاكتب الأرقام اللي فالصورة هنا خلال **60 ثانية**.",
-                file=file,
-                mention_author=False,
-            )
+            verification_message = await message.reply("🔐 **تحقق من عملية التحويل**\nاكتب الأرقام اللي فالصورة هنا خلال **60 ثانية**.", file=file, mention_author=False)
             deadline = asyncio.get_running_loop().time() + 60
             while True:
                 remaining = deadline - asyncio.get_running_loop().time()
@@ -176,10 +164,7 @@ class PrefixSystems(commands.Cog):
                     break
                 if candidate.content.strip() == code:
                     with connect() as con:
-                        sender_row = con.execute(
-                            "SELECT balance FROM balances WHERE guild_id=? AND user_id=?",
-                            (guild.id, sender.id),
-                        ).fetchone()
+                        sender_row = con.execute("SELECT balance FROM balances WHERE guild_id=? AND user_id=?", (guild.id, sender.id)).fetchone()
                         live_balance = sender_row["balance"] if sender_row else 0
                         if live_balance < amount:
                             with contextlib.suppress(discord.HTTPException):
@@ -213,10 +198,7 @@ class PrefixSystems(commands.Cog):
         if not message.guild or not isinstance(message.author, discord.Member):
             return True
         with connect() as con:
-            row = con.execute(
-                "SELECT owner_id, closed_by, rating FROM tickets WHERE channel_id=?",
-                (message.channel.id,),
-            ).fetchone()
+            row = con.execute("SELECT owner_id, closed_by, rating FROM tickets WHERE channel_id=?", (message.channel.id,)).fetchone()
         if not row:
             await self._reply(message, "❌ هاد الروم ماشي تذكرة.")
             return True
@@ -231,11 +213,7 @@ class PrefixSystems(commands.Cog):
             return True
         cfg = get_config(message.guild.id)
         max_rating = max(1, min(10, int(cfg["ticket_rating_max"] or 10)))
-        await self._reply(
-            message,
-            "⭐ اختار التقييم، ومن بعد كتب الملاحظة ديالك فالنموذج اللي غادي يبان.",
-            view=RatingView(message.channel.id, message.author.id, max_rating),
-        )
+        await self._reply(message, "⭐ اختار التقييم، ومن بعد كتب الملاحظة ديالك فالنموذج اللي غادي يبان.", view=RatingView(message.channel.id, message.author.id, max_rating))
         return True
 
     async def handle_jail_shortcuts(self, message: discord.Message):
@@ -245,7 +223,7 @@ class PrefixSystems(commands.Cog):
             return False
         if not message.guild or not isinstance(message.author, discord.Member):
             return True
-        if not message.author.guild_permissions.manage_guild and not message.author.guild_permissions.administrator:
+        if not (message.author.guild_permissions.manage_guild or message.author.guild_permissions.administrator):
             await self._reply(message, "❌ ما عندكش صلاحية استعمال هاد الاختصار.")
             return True
         target = message.mentions[0] if message.mentions else None
@@ -254,26 +232,27 @@ class PrefixSystems(commands.Cog):
         if not target:
             await self._reply(message, f"❌ الاستعمال: `{parts[0]} @user` أو `{parts[0]} id`.")
             return True
-        moderation = self.bot.get_cog("Moderation")
-        if not moderation:
-            await self._reply(message, "❌ نظام الإدارة غير محمل.")
+        jail_cog = self.bot.get_cog("Jail")
+        if not jail_cog:
+            await self._reply(message, "❌ نظام السجن غير محمل.")
             return True
         try:
             if parts[0] == "سجن":
-                ok, error = await moderation.perform_jail(message.guild, target, message.author, None)
+                ok, error = await jail_cog.jail_member(message.guild, target, message.author, None)
                 if not ok:
                     await self._reply(message, error or "❌ فشل السجن.")
                 else:
                     await self._reply(message, f"🔒 تم سجن {target.mention}.")
             else:
-                found = await moderation.perform_unjail(message.guild, target)
+                found = await jail_cog.unjail_member(message.guild, target)
                 if not found:
                     await self._reply(message, "❌ هاد العضو ماشي مسجون عندي.")
                 else:
                     await self._reply(message, f"🔓 تم فك السجن عن {target.mention}.")
         except (discord.Forbidden, discord.HTTPException) as exc:
             await self._reply(message, f"❌ البوت ما قدرش ينفذ العملية: `{exc}`")
-        except Exception:
+        except Exception as exc:
+            print(f"[JAIL PREFIX ERROR] {type(exc).__name__}: {exc}")
             await self._reply(message, "❌ وقع خطأ داخلي أثناء تنفيذ أمر السجن. تأكد من إعدادات البوت ثم عاود المحاولة.")
         return True
 
@@ -285,9 +264,15 @@ class PrefixSystems(commands.Cog):
             return await self.handle_c(message)
         if content in {"-تقييم", "-تقييم التكت"}:
             return await self.handle_rating_command(message)
-        if content.startswith("سجن") or content.startswith("عفو"):
+        if content == "سجن" or content.startswith("سجن ") or content == "عفو" or content.startswith("عفو "):
             return await self.handle_jail_shortcuts(message)
         return False
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # Prefix systems are message listeners, not normal Discord commands.
+        # This is required for Arabic shortcuts such as "سجن @user" and "عفو @user".
+        await self.handle_message(message)
 
 
 async def setup(bot):
