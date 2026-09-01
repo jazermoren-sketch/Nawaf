@@ -27,6 +27,7 @@ COGS = (
     "cogs.moderation",
     "cogs.prefix_systems",
     "cogs.games",
+    "cogs.admin_prefix",
     "cogs.health",
 )
 
