@@ -102,6 +102,12 @@ def init_db():
             balance INTEGER DEFAULT 0,
             PRIMARY KEY (guild_id, user_id)
         );
+        CREATE TABLE IF NOT EXISTS points (
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            points INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
         CREATE TABLE IF NOT EXISTS sent_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             guild_id INTEGER NOT NULL,
