@@ -33,14 +33,8 @@ class Games(commands.Cog):
 
     def add_points(self, guild_id: int, user_id: int, amount: int):
         with connect() as con:
-            con.execute(
-                "INSERT OR IGNORE INTO points(guild_id,user_id,points) VALUES(?,?,0)",
-                (guild_id, user_id),
-            )
-            con.execute(
-                "UPDATE points SET points=points+? WHERE guild_id=? AND user_id=?",
-                (amount, guild_id, user_id),
-            )
+            con.execute("INSERT OR IGNORE INTO points(guild_id,user_id,points) VALUES(?,?,0)", (guild_id, user_id))
+            con.execute("UPDATE points SET points=points+? WHERE guild_id=? AND user_id=?", (amount, guild_id, user_id))
 
     @app_commands.command(name="game-start", description="تشغيل لعبة جماعية للأعضاء")
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -53,14 +47,13 @@ class Games(commands.Cog):
         interaction: discord.Interaction,
         game: app_commands.Choice[str],
         reward: app_commands.Range[int, 0, 1000] = 5,
-        max_players: app_commands.Range[int, 2, 15] | None = None,
+        max_players: app_commands.Range[int, 2, 15] = 15,
     ):
         key = (interaction.guild.id, interaction.channel.id)
         if key in self.sessions:
             return await interaction.response.send_message("❌ كاينة لعبة جماعية مفتوحة فهاد الروم.", ephemeral=True)
         spec = GROUP_GAMES[game.value]
-        maximum = max_players or spec["max"]
-        maximum = min(maximum, spec["max"], 15)
+        maximum = min(max_players, spec["max"], 15)
         if maximum < spec["min"]:
             maximum = spec["min"]
         session = GameSession(
@@ -75,11 +68,8 @@ class Games(commands.Cog):
         )
         self.sessions[key] = session
         await interaction.response.send_message(
-            f"🎮 **{spec['name']}** بدأت!\n"
-            f"👥 اللاعبين: **1/{maximum}**\n"
-            f"📌 الحد الأدنى: **{spec['min']}**\n"
-            f"🏆 الفائز يحصل على **{reward} نقطة**.\n\n"
-            "اكتب `/game-join` للدخول، و`/game-spin` لبدء الجولة بعد اكتمال الحد الأدنى."
+            f"🎮 **{spec['name']}** بدأت!\n👥 اللاعبين: **1/{maximum}**\n📌 الحد الأدنى: **{spec['min']}**\n"
+            f"🏆 الفائز يحصل على **{reward} نقطة**.\n\nاكتب `/game-join` للدخول، و`/game-spin` لبدء الجولة."
         )
 
     @app_commands.command(name="game-join", description="الدخول في اللعبة الجماعية الحالية")
