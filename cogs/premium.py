@@ -128,10 +128,13 @@ class Premium(commands.Cog):
         if roulette is None:
             return
 
-        module = __import__("cogs.roulette_multi_message", fromlist=["Session", "LobbyView", "DecisionView"])
+        module = __import__(
+            "cogs.roulette_multi_message",
+            fromlist=["Session", "LobbyView", "DecisionView"],
+        )
         original_session_init = module.Session.__init__
-        original_lobby_text = roulette.lobby_text
         original_decision_view = module.DecisionView
+        original_start_lobby = roulette.start_lobby
 
         def session_init(session, guild_id: int, channel_id: int, starter_id: int):
             original_session_init(session, guild_id, channel_id, starter_id)
@@ -173,7 +176,6 @@ class Premium(commands.Cog):
 
         class PremiumDecisionView(original_decision_view):
             def __init__(self, game, session, selected_id: int):
-                super().__init__.__self__ if False else None
                 discord.ui.View.__init__(self, timeout=module.DECISION_SECONDS)
                 self.game = game
                 self.session = session
@@ -259,12 +261,19 @@ class Premium(commands.Cog):
 
         module.DecisionView = PremiumDecisionView
 
+        async def premium_start_lobby(message: discord.Message):
+            if message.guild and not is_premium(message.guild.id):
+                await message.channel.send(UPSELL_TEXT)
+            return await original_start_lobby(message)
+
+        roulette.start_lobby = premium_start_lobby
+
     @app_commands.command(
-        name="maximum-number-players-in-roullete",
+        name="maximum-number-players-roullete",
         description="تحديد الحد الأقصى للاعبين في روليت السيرفر للبريميوم",
     )
     @app_commands.describe(maximum="الحد الأقصى من 4 إلى 2000 لاعب")
-    async def maximum_number_players_in_roullete(
+    async def maximum_number_players_roullete(
         self, interaction: discord.Interaction, maximum: app_commands.Range[int, 4, 2000]
     ):
         if not interaction.guild:
