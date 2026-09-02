@@ -34,6 +34,7 @@ COGS = (
     "cogs.premium",
     "cogs.game_assets",
     "cogs.points",
+    "cogs.mini_games",
     "cogs.roulette_prefix_guard",
     "cogs.help",
     "cogs.admin_prefix",
