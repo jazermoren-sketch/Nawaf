@@ -29,8 +29,8 @@ DURATION_SECONDS = {
 
 UPSELL_TEXT = (
     "**يمكنك تغيير الحد الاقصى للاعبين هذه الميزة حصرية للبريميوم فقط**\n"
-    f"للتواصل لاخد البريميوم خش ذا السيرفر و منشن <@{BOT_OWNER_ID}> وادفع له بالطرق المتاحة "
-    "وبيعطيك بريميوم بالمدة على حسب لي شريته انت\n"
+    "للتواصل لاخد البريميوم خش ذا السيرفر و منشن "
+    f"<@{BOT_OWNER_ID}> و ادفع له بالطرق المتاحة و بيعطيك بريميوم بالمدة على حسب لي شريته انت\n"
     f"{SUPPORT_INVITE}"
 )
 
@@ -122,144 +122,6 @@ class Premium(commands.Cog):
         self.bot = bot
         ensure_premium_table()
 
-    async def cog_load(self):
-        """Apply the per-server premium player limit to the existing roulette cog."""
-        roulette = self.bot.get_cog("RouletteMultiMessage")
-        if roulette is None:
-            return
-
-        module = __import__(
-            "cogs.roulette_multi_message",
-            fromlist=["Session", "LobbyView", "DecisionView"],
-        )
-        original_session_init = module.Session.__init__
-        original_decision_view = module.DecisionView
-
-        def session_init(session, guild_id: int, channel_id: int, starter_id: int):
-            original_session_init(session, guild_id, channel_id, starter_id)
-            session.max_players = get_roulette_max(guild_id)
-
-        module.Session.__init__ = session_init
-
-        def dynamic_lobby_text(session, remaining: int):
-            names = []
-            for index, uid in enumerate(session.players, 1):
-                member = roulette.member(session.guild_id, uid)
-                names.append(f"{index}. {member.mention if member else f'<@{uid}>'}")
-            roster = "\n".join(names) or "مازال حتى لاعب."
-            maximum = getattr(session, "max_players", DEFAULT_ROULETTE_MAX)
-            return (
-                "🎰 **روليت الإقصاء**\n\n"
-                f"👥 المشاركين: **{len(session.players)}/{maximum}**\n"
-                f"✅ الحد الأدنى: **{MIN_ROULETTE_PLAYERS} لاعبين**\n"
-                f"⏳ البداية التلقائية بعد **{remaining} ثانية**\n\n"
-                f"{roster}\n\n"
-                "اضغط على **دخول إلى اللعبة** للمشاركة أو **خروج من اللعبة** للانسحاب."
-            )
-
-        roulette.lobby_text = dynamic_lobby_text
-
-        async def dynamic_join(view, interaction: discord.Interaction, button: discord.ui.Button):
-            maximum = getattr(view.session, "max_players", DEFAULT_ROULETTE_MAX)
-            if interaction.user.id in view.session.players:
-                return await interaction.response.send_message("⚠️ راك داخل اللعبة أصلاً.", ephemeral=True)
-            if len(view.session.players) >= maximum:
-                return await interaction.response.send_message(
-                    f"❌ وصلنا للحد الأقصى ديال **{maximum} لاعب**.", ephemeral=True
-                )
-            view.session.players.append(interaction.user.id)
-            await interaction.response.defer()
-            await view.game.update_lobby(view.session)
-
-        module.LobbyView.join.callback = dynamic_join
-
-        class PremiumDecisionView(original_decision_view):
-            def __init__(self, game, session, selected_id: int):
-                discord.ui.View.__init__(self, timeout=module.DECISION_SECONDS)
-                self.game = game
-                self.session = session
-                self.selected_id = selected_id
-                self.done = False
-
-                targets = [uid for uid in session.players if uid != selected_id]
-                if len(targets) <= 14:
-                    for index, uid in enumerate(targets):
-                        member = game.member(session.guild_id, uid)
-                        label = game.short_name(member.display_name if member else str(uid))
-                        button = discord.ui.Button(
-                            label=label,
-                            style=discord.ButtonStyle.danger,
-                            emoji="🎯",
-                            row=index // 5,
-                        )
-
-                        async def callback(interaction: discord.Interaction, target_id: int = uid):
-                            await self.resolve(interaction, "kick", target_id)
-
-                        button.callback = callback
-                        self.add_item(button)
-                else:
-                    select = discord.ui.UserSelect(
-                        placeholder="اختار اللاعب لي بدك تطرده",
-                        min_values=1,
-                        max_values=1,
-                        row=0,
-                    )
-
-                    async def select_callback(interaction: discord.Interaction):
-                        chosen = select.values[0] if select.values else None
-                        target_id = getattr(chosen, "id", None)
-                        if target_id not in self.session.players or target_id == self.selected_id:
-                            return await interaction.response.send_message(
-                                "❌ خاصك تختار لاعب مشارك وماشي اللاعب اللي اختارتو العجلة.",
-                                ephemeral=True,
-                            )
-                        await self.resolve(interaction, "kick", target_id)
-
-                    select.callback = select_callback
-                    self.add_item(select)
-
-                random_button = discord.ui.Button(
-                    label="طرد عشوائي", style=discord.ButtonStyle.primary, emoji="🎲", row=4
-                )
-                withdraw_button = discord.ui.Button(
-                    label="انسحاب", style=discord.ButtonStyle.secondary, emoji="🚪", row=4
-                )
-                random_button.callback = self.random_kick
-                withdraw_button.callback = self.withdraw
-                self.add_item(random_button)
-                self.add_item(withdraw_button)
-
-            async def interaction_check(self, interaction: discord.Interaction) -> bool:
-                if interaction.user.id != self.selected_id:
-                    await interaction.response.send_message(
-                        "❌ هاد القرار غير للاعب اللي اختارتو العجلة.", ephemeral=True
-                    )
-                    return False
-                if self.done:
-                    await interaction.response.send_message("❌ القرار سالا.", ephemeral=True)
-                    return False
-                return True
-
-            async def resolve(self, interaction: discord.Interaction, action: str, target_id: int | None = None):
-                if self.done:
-                    return
-                self.done = True
-                self.session.decision = (action, target_id)
-                self.session.decision_event.set()
-                for item in self.children:
-                    if hasattr(item, "disabled"):
-                        item.disabled = True
-                await interaction.response.edit_message(view=self)
-
-            async def random_kick(self, interaction: discord.Interaction):
-                await self.resolve(interaction, "random")
-
-            async def withdraw(self, interaction: discord.Interaction):
-                await self.resolve(interaction, "withdraw")
-
-        module.DecisionView = PremiumDecisionView
-
     @app_commands.command(
         name="maximum-number-players-roullete",
         description="تحديد الحد الأقصى للاعبين في روليت السيرفر للبريميوم",
@@ -276,7 +138,6 @@ class Premium(commands.Cog):
             return await interaction.response.send_message(
                 "❌ غير صاحب السيرفر يقدر يبدل الحد الأقصى للاعبين.", ephemeral=True
             )
-
         set_roulette_max(interaction.guild.id, int(maximum))
         await interaction.response.send_message(
             f"✅ تم تحديد الحد الأقصى للروليت في **{maximum} لاعب**.",
