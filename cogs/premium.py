@@ -28,7 +28,7 @@ DURATION_SECONDS = {
 }
 
 UPSELL_TEXT = (
-    "**يمكنك تغيير الحد الاقصى للاعبين للبريميوم فقط**\n"
+    "**يمكنك تغيير الحد الاقصى للاعبين هذه الميزة حصرية للبريميوم فقط**\n"
     f"للتواصل لاخد البريميوم خش ذا السيرفر و منشن <@{BOT_OWNER_ID}> وادفع له بالطرق المتاحة "
     "وبيعطيك بريميوم بالمدة على حسب لي شريته انت\n"
     f"{SUPPORT_INVITE}"
@@ -134,7 +134,6 @@ class Premium(commands.Cog):
         )
         original_session_init = module.Session.__init__
         original_decision_view = module.DecisionView
-        original_start_lobby = roulette.start_lobby
 
         def session_init(session, guild_id: int, channel_id: int, starter_id: int):
             original_session_init(session, guild_id, channel_id, starter_id)
@@ -153,7 +152,7 @@ class Premium(commands.Cog):
                 "🎰 **روليت الإقصاء**\n\n"
                 f"👥 المشاركين: **{len(session.players)}/{maximum}**\n"
                 f"✅ الحد الأدنى: **{MIN_ROULETTE_PLAYERS} لاعبين**\n"
-                f"⏳ البداية التلقائية بعد **30 ثانية**\n\n"
+                f"⏳ البداية التلقائية بعد **{remaining} ثانية**\n\n"
                 f"{roster}\n\n"
                 "اضغط على **دخول إلى اللعبة** للمشاركة أو **خروج من اللعبة** للانسحاب."
             )
@@ -260,13 +259,6 @@ class Premium(commands.Cog):
                 await self.resolve(interaction, "withdraw")
 
         module.DecisionView = PremiumDecisionView
-
-        async def premium_start_lobby(message: discord.Message):
-            if message.guild and not is_premium(message.guild.id):
-                await message.channel.send(UPSELL_TEXT)
-            return await original_start_lobby(message)
-
-        roulette.start_lobby = premium_start_lobby
 
     @app_commands.command(
         name="maximum-number-players-roullete",
