@@ -30,9 +30,20 @@ CATEGORY_LABELS = {
 def ensure_point_columns() -> None:
     with connect() as con:
         columns = {row[1] for row in con.execute("PRAGMA table_info(points)")}
+        added_any = False
         for column in CATEGORY_COLUMNS.values():
             if column not in columns:
                 con.execute(f"ALTER TABLE points ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
+                added_any = True
+
+        # Older Nawaf versions kept all game points in the legacy `points`
+        # column. Preserve that balance as group-game points during migration
+        # instead of silently resetting users to zero.
+        if added_any:
+            con.execute(
+                "UPDATE points SET group_points=points "
+                "WHERE individual_points=0 AND group_points=0 AND roulette_points=0"
+            )
 
         # Keep the legacy total synchronized with the three categories.
         con.execute(
@@ -46,6 +57,7 @@ def add_category_points(guild_id: int, user_id: int, amount: int, category: str)
     amount = int(amount)
     if amount == 0:
         return
+    ensure_point_columns()
     column = CATEGORY_COLUMNS[category]
     with connect() as con:
         con.execute(
