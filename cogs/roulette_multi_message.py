@@ -35,6 +35,7 @@ class Session:
         self.lobby_message: discord.Message | None = None
         self.decision_event = asyncio.Event()
         self.decision: tuple[str, int | None] | None = None
+        self.max_players = MAX_PLAYERS
 
 
 class LobbyView(discord.ui.View):
@@ -56,8 +57,11 @@ class LobbyView(discord.ui.View):
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id in self.session.players:
             return await interaction.response.send_message("⚠️ راك داخل اللعبة أصلاً.", ephemeral=True)
-        if len(self.session.players) >= MAX_PLAYERS:
-            return await interaction.response.send_message("❌ وصلنا للحد الأقصى ديال 15 لاعب.", ephemeral=True)
+        if len(self.session.players) >= getattr(self.session, "max_players", MAX_PLAYERS):
+            maximum = getattr(self.session, "max_players", MAX_PLAYERS)
+            return await interaction.response.send_message(
+                f"❌ وصلنا للحد الأقصى ديال **{maximum} لاعب**.", ephemeral=True
+            )
         self.session.players.append(interaction.user.id)
         await interaction.response.defer()
         await self.game.update_lobby(self.session)
@@ -96,8 +100,12 @@ class DecisionView(discord.ui.View):
             button.callback = callback
             self.add_item(button)
 
-        random_button = discord.ui.Button(label="طرد عشوائي", style=discord.ButtonStyle.primary, emoji="🎲", row=4)
-        withdraw_button = discord.ui.Button(label="انسحاب", style=discord.ButtonStyle.secondary, emoji="🚪", row=4)
+        random_button = discord.ui.Button(
+            label="طرد عشوائي", style=discord.ButtonStyle.primary, emoji="🎲", row=4
+        )
+        withdraw_button = discord.ui.Button(
+            label="انسحاب", style=discord.ButtonStyle.secondary, emoji="🚪", row=4
+        )
         random_button.callback = self.random_kick
         withdraw_button.callback = self.withdraw
         self.add_item(random_button)
@@ -105,14 +113,18 @@ class DecisionView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.selected_id:
-            await interaction.response.send_message("❌ هاد القرار غير للاعب اللي اختارتو العجلة.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ هاد القرار غير للاعب اللي اختارتو العجلة.", ephemeral=True
+            )
             return False
         if self.done:
             await interaction.response.send_message("❌ القرار سالا.", ephemeral=True)
             return False
         return True
 
-    async def resolve(self, interaction: discord.Interaction, action: str, target_id: int | None = None):
+    async def resolve(
+        self, interaction: discord.Interaction, action: str, target_id: int | None = None
+    ):
         if self.done:
             return
         self.done = True
@@ -120,6 +132,8 @@ class DecisionView(discord.ui.View):
         self.session.decision_event.set()
         for item in self.children:
             if isinstance(item, discord.ui.Button):
+                item.disabled = True
+            elif isinstance(item, discord.ui.Select):
                 item.disabled = True
         await interaction.response.edit_message(view=self)
 
@@ -136,6 +150,7 @@ class RouletteMultiMessage(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.sessions: dict[tuple[int, int], Session] = {}
+        self.game_webhooks: dict[tuple[int, int], discord.Webhook] = {}
 
     @staticmethod
     def key(session: Session) -> tuple[int, int]:
@@ -156,9 +171,10 @@ class RouletteMultiMessage(commands.Cog):
             member = self.member(session.guild_id, uid)
             names.append(f"{index}. {member.mention if member else f'<@{uid}>'}")
         roster = "\n".join(names) or "مازال حتى لاعب."
+        maximum = getattr(session, "max_players", MAX_PLAYERS)
         return (
             "🎰 **روليت الإقصاء**\n\n"
-            f"👥 المشاركين: **{len(session.players)}/{MAX_PLAYERS}**\n"
+            f"👥 المشاركين: **{len(session.players)}/{maximum}**\n"
             f"✅ الحد الأدنى: **{MIN_PLAYERS} لاعبين**\n"
             f"⏳ البداية التلقائية بعد **{remaining} ثانية**\n\n"
             f"{roster}\n\n"
@@ -180,9 +196,88 @@ class RouletteMultiMessage(commands.Cog):
         if message.content.strip() == "-روليت":
             await self.start_lobby(message)
 
+    async def get_game_webhook(
+        self, guild: discord.Guild, channel: discord.TextChannel
+    ) -> discord.Webhook | None:
+        key = (guild.id, channel.id)
+        cached = self.game_webhooks.get(key)
+        if cached is not None:
+            return cached
+
+        webhook_name = self.short_name(guild.name, 80)
+
+        try:
+            hooks = await channel.webhooks()
+            for hook in hooks:
+                if hook.name == webhook_name and hook.user and self.bot.user and hook.user.id == self.bot.user.id:
+                    self.game_webhooks[key] = hook
+                    return hook
+        except discord.HTTPException:
+            pass
+
+        try:
+            avatar_bytes = None
+            if guild.icon:
+                try:
+                    avatar_bytes = await guild.icon.replace(size=256).read()
+                except Exception:
+                    avatar_bytes = None
+
+            webhook = await channel.create_webhook(
+                name=webhook_name,
+                avatar=avatar_bytes,
+                reason="Nawaf game webhook",
+            )
+            self.game_webhooks[key] = webhook
+            return webhook
+        except (discord.Forbidden, discord.HTTPException):
+            return None
+
+    async def game_send(
+        self,
+        session: Session,
+        channel: discord.TextChannel,
+        *,
+        content: str | None = None,
+        file: discord.File | None = None,
+        view: discord.ui.View | None = None,
+    ):
+        webhook = await self.get_game_webhook(self.bot.get_guild(session.guild_id), channel) if self.bot.get_guild(session.guild_id) else None
+        allowed = discord.AllowedMentions(users=True)
+
+        if webhook is not None:
+            try:
+                return await webhook.send(
+                    content=content,
+                    file=file,
+                    view=view,
+                    allowed_mentions=allowed,
+                    wait=True,
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                self.game_webhooks.pop((session.guild_id, session.channel_id), None)
+
+        return await channel.send(
+            content=content,
+            file=file,
+            view=view,
+            allowed_mentions=allowed,
+        )
+
+    @staticmethod
+    def premium_upsell(guild_id: int) -> str | None:
+        try:
+            from cogs.premium import UPSELL_TEXT, is_premium
+
+            return None if is_premium(guild_id) else UPSELL_TEXT
+        except Exception:
+            return None
+
     async def start_lobby(self, message: discord.Message):
         if not is_group_game_channel_allowed(message.guild.id, message.channel.id):
-            return await message.reply("❌ هاد الروم ما مسموحش فيه الألعاب الجماعية.", mention_author=False)
+            return await message.reply(
+                "❌ هاد الروم ما مسموحش فيه الألعاب الجماعية.", mention_author=False
+            )
 
         key = (message.guild.id, message.channel.id)
         if key in self.sessions:
@@ -211,7 +306,19 @@ class RouletteMultiMessage(commands.Cog):
                 return
 
             session.active = True
-            await session.lobby_message.edit(content="✅ **سال وقت التسجيل — الروليت غادي تبدا دابا.**", view=None)
+            await session.lobby_message.edit(view=None)
+
+            # This is intentionally a reply to the lobby. It is the transition message,
+            # not the premium upsell itself.
+            await session.lobby_message.reply(
+                "**اللاعبين تجهزو اللعبة راح تبدا بعد شوي**",
+                mention_author=False,
+            )
+
+            upsell = self.premium_upsell(session.guild_id)
+            if upsell:
+                await message.channel.send(upsell)
+
             await asyncio.sleep(1)
             await self.run_game(session, message.channel)
         except asyncio.CancelledError:
@@ -226,11 +333,13 @@ class RouletteMultiMessage(commands.Cog):
                 session.decision_event = asyncio.Event()
                 session.decision = None
 
-                # Image-only message: the wheel itself points to the chosen player.
-                await channel.send(file=await self.wheel_file(session, selected_id))
+                # The wheel and all gameplay messages are sent through the server-named webhook.
+                await self.game_send(session, channel, file=await self.wheel_file(session, selected_id))
 
                 view = DecisionView(self, session, selected_id)
-                await channel.send(
+                await self.game_send(
+                    session,
+                    channel,
                     content=(
                         f"**<@{selected_id}>، اختر الشخص لي بدك تطرده**\n\n"
                         f"⏳ عندك **{DECISION_SECONDS} ثانية**."
@@ -243,8 +352,12 @@ class RouletteMultiMessage(commands.Cog):
                 except asyncio.TimeoutError:
                     if selected_id in session.players:
                         session.players.remove(selected_id)
-                    await channel.send(content=f"**تم طرد <@{selected_id}> بسبب الخمول**")
-                    await self.send_elimination_gif(channel)
+                    await self.game_send(
+                        session,
+                        channel,
+                        content=f"**تم طرد <@{selected_id}> بسبب الخمول**",
+                    )
+                    await self.send_elimination_gif(session, channel)
                     await asyncio.sleep(1.5)
                     continue
 
@@ -252,29 +365,43 @@ class RouletteMultiMessage(commands.Cog):
                 if action == "withdraw":
                     if selected_id in session.players:
                         session.players.remove(selected_id)
-                    await channel.send(
-                        content=f"**انسحب <@{selected_id}> من اللعبة، ستبدأ الجولة التالية بعد قليل.**"
+                    await self.game_send(
+                        session,
+                        channel,
+                        content=f"**انسحب <@{selected_id}> من اللعبة، ستبدأ الجولة التالية بعد قليل.**",
                     )
                 else:
                     if action == "random":
-                        target_id = random.choice([uid for uid in session.players if uid != selected_id])
+                        target_id = random.choice(
+                            [uid for uid in session.players if uid != selected_id]
+                        )
                     if target_id not in session.players or target_id == selected_id:
-                        target_id = random.choice([uid for uid in session.players if uid != selected_id])
+                        target_id = random.choice(
+                            [uid for uid in session.players if uid != selected_id]
+                        )
                     session.players.remove(target_id)
-                    await channel.send(
-                        content=f"**تم طرد <@{target_id}> من اللعبة، سيتم بدأ الجولة التالية بعد قليل.**"
+                    await self.game_send(
+                        session,
+                        channel,
+                        content=f"**تم طرد <@{target_id}> من اللعبة، سيتم بدأ الجولة التالية بعد قليل.**",
                     )
-                    await self.send_elimination_gif(channel)
+                    await self.send_elimination_gif(session, channel)
 
                 await asyncio.sleep(1.5)
 
             if len(session.players) == 2:
                 winner = random.choice(session.players)
-                await channel.send(file=await self.wheel_file(session, winner, final=True))
+                await self.game_send(
+                    session,
+                    channel,
+                    file=await self.wheel_file(session, winner, final=True),
+                )
                 await asyncio.sleep(1)
                 self.add_points(session.guild_id, winner, WINNER_REWARD)
-                await channel.send(
-                    content=f"🏆 **الفائز فالروليت هو <@{winner}>!**\n⭐ ربح **{WINNER_REWARD} نقطة**."
+                await self.game_send(
+                    session,
+                    channel,
+                    content=f"🏆 **الفائز فالروليت هو <@{winner}>!**\n⭐ ربح **{WINNER_REWARD} نقطة**.",
                 )
         finally:
             session.active = False
@@ -292,7 +419,7 @@ class RouletteMultiMessage(commands.Cog):
                 (amount, guild_id, user_id),
             )
 
-    async def send_elimination_gif(self, channel: discord.TextChannel):
+    async def send_elimination_gif(self, session: Session, channel: discord.TextChannel):
         try:
             import aiohttp
 
@@ -301,11 +428,15 @@ class RouletteMultiMessage(commands.Cog):
                 async with http.get(ELIMINATION_GIF_URL) as response:
                     if response.status == 200:
                         data = await response.read()
-                        await channel.send(file=discord.File(io.BytesIO(data), filename="elimination.gif"))
+                        await self.game_send(
+                            session,
+                            channel,
+                            file=discord.File(io.BytesIO(data), filename="elimination.gif"),
+                        )
                         return
         except Exception:
             pass
-        await channel.send(ELIMINATION_GIF_URL)
+        await self.game_send(session, channel, content=ELIMINATION_GIF_URL)
 
     async def avatar(self, member: discord.Member) -> bytes | None:
         try:
@@ -313,7 +444,9 @@ class RouletteMultiMessage(commands.Cog):
         except Exception:
             return None
 
-    async def wheel_file(self, session: Session, selected_id: int, final: bool = False) -> discord.File:
+    async def wheel_file(
+        self, session: Session, selected_id: int, final: bool = False
+    ) -> discord.File:
         size = 1000
         image = Image.new("RGB", (size, size), (20, 22, 28))
         draw = ImageDraw.Draw(image)
@@ -323,9 +456,18 @@ class RouletteMultiMessage(commands.Cog):
         members = [m for m in members if m is not None]
         count = max(1, len(members))
         step = 360 / count
-        selected_index = next((i for i, m in enumerate(members) if m.id == selected_id), 0)
+        selected_index = next(
+            (i for i, m in enumerate(members) if m.id == selected_id), 0
+        )
         rotation = -90 - ((selected_index + 0.5) * step)
-        palette = [(70, 91, 132), (109, 72, 123), (64, 125, 105), (141, 89, 59), (77, 108, 145), (125, 75, 94)]
+        palette = [
+            (70, 91, 132),
+            (109, 72, 123),
+            (64, 125, 105),
+            (141, 89, 59),
+            (77, 108, 145),
+            (125, 75, 94),
+        ]
 
         for i, member in enumerate(members):
             start = rotation + i * step
@@ -339,9 +481,16 @@ class RouletteMultiMessage(commands.Cog):
                 width=4,
             )
 
-        draw.ellipse((cx - 100, cy - 100, cx + 100, cy + 100), fill=(30, 33, 42), outline=(245, 198, 66), width=8)
+        draw.ellipse(
+            (cx - 100, cy - 100, cx + 100, cy + 100),
+            fill=(30, 33, 42),
+            outline=(245, 198, 66),
+            width=8,
+        )
         try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 27)
+            font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 27
+            )
         except OSError:
             font = ImageFont.load_default()
 
@@ -359,23 +508,46 @@ class RouletteMultiMessage(commands.Cog):
                     image.paste(av, (x - 42, y - 42), mask)
                 except Exception:
                     pass
-            draw.ellipse((x - 45, y - 45, x + 45, y + 45), outline=(255, 85, 85) if member.id == selected_id else (255, 255, 255), width=6)
+            draw.ellipse(
+                (x - 45, y - 45, x + 45, y + 45),
+                outline=(255, 85, 85) if member.id == selected_id else (255, 255, 255),
+                width=6,
+            )
             label = self.short_name(member.display_name, 12)
             box = draw.textbbox((0, 0), label, font=font)
             tw = box[2] - box[0]
             ty = y + 50
-            draw.rounded_rectangle((x - tw / 2 - 7, ty - 2, x + tw / 2 + 7, ty + 31), radius=8, fill=(10, 12, 16))
+            draw.rounded_rectangle(
+                (x - tw / 2 - 7, ty - 2, x + tw / 2 + 7, ty + 31),
+                radius=8,
+                fill=(10, 12, 16),
+            )
             draw.text((x - tw / 2, ty), label, fill=(255, 255, 255), font=font)
 
         # Fixed pointer at 12 o'clock; selected player is rotated underneath it.
-        draw.polygon([(cx, 15), (cx - 32, 85), (cx + 32, 85)], fill=(255, 70, 70), outline=(255, 230, 230))
+        draw.polygon(
+            [(cx, 15), (cx - 32, 85), (cx + 32, 85)],
+            fill=(255, 70, 70),
+            outline=(255, 230, 230),
+        )
         selected_member = next((m for m in members if m.id == selected_id), None)
-        result_name = self.short_name(selected_member.display_name if selected_member else "Selected", 22)
+        result_name = self.short_name(
+            selected_member.display_name if selected_member else "Selected", 22
+        )
         box = draw.textbbox((0, 0), result_name, font=font)
         tw = box[2] - box[0]
         footer_y = size - 55
-        draw.rounded_rectangle((cx - tw / 2 - 16, footer_y - 8, cx + tw / 2 + 16, footer_y + 30), radius=12, fill=(245, 198, 66))
-        draw.text((cx - tw / 2, footer_y), result_name, fill=(20, 22, 28), font=font)
+        draw.rounded_rectangle(
+            (cx - tw / 2 - 16, footer_y - 8, cx + tw / 2 + 16, footer_y + 30),
+            radius=12,
+            fill=(245, 198, 66),
+        )
+        draw.text(
+            (cx - tw / 2, footer_y),
+            result_name,
+            fill=(20, 22, 28),
+            font=font,
+        )
 
         if final:
             draw.text((25, 25), "FINAL", fill=(245, 198, 66), font=font)
