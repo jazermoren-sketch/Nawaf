@@ -8,7 +8,7 @@ from typing import Optional
 
 import discord
 from discord.ext import commands
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 from cogs.game_channels import is_group_game_channel_allowed
 from database import connect
@@ -183,53 +183,75 @@ class RouletteMultiMessage(commands.Cog):
         guild = self.bot.get_guild(guild_id)
         return guild.get_member(user_id) if guild else None
 
-    def lobby_embed(self, session: Session, remaining: int) -> discord.Embed:
-        guild = self.bot.get_guild(session.guild_id)
-        name = guild.name if guild else "السيرفر"
-        players = []
-        for uid in session.players:
-            member = self.member(session.guild_id, uid)
-            players.append(f"• {member.mention if member else f'<@{uid}>'}")
-        roster = "\n".join(players) if players else "• مازال حتى لاعب."
-        embed = discord.Embed(
-            title="🎰 روليت الإقصاء",
-            description=(
-                "🎮 **انضم للعبة عبر الزر الأخضر في الأسفل.**\n"
-                "🚪 **يمكنك الخروج في أي وقت قبل بداية اللعبة.**\n\n"
-                f"👥 **المشاركين: {len(session.players)}/{session.max_players}**\n"
-                f"✅ **الحد الأدنى: {MIN_PLAYERS} لاعبين**\n"
-                f"⏳ **البداية التلقائية بعد {remaining} ثانية**\n\n"
-                f"**اللاعبين:**\n{roster}"
-            ),
-            color=discord.Color.dark_purple(),
-        )
-        if guild and guild.icon:
-            embed.set_thumbnail(url=guild.icon.url)
-        if guild and guild.banner:
-            embed.set_image(url=guild.banner.url)
-        embed.set_footer(text=f"{name} • الألعاب")
-        return embed
+    def make_lobby_art(self, guild: discord.Guild, players: int, maximum: int) -> discord.File:
+        width, height = 1200, 675
+        image = Image.new("RGB", (width, height), (18, 16, 23))
 
-    def make_lobby_art(self, guild: discord.Guild) -> discord.File:
-        size = 1200
-        image = Image.new("RGB", (size, 675), (18, 16, 23))
+        # Use the server banner as the background when available, with a dark overlay.
+        if guild.banner:
+            try:
+                banner_bytes = asyncio.get_event_loop().run_until_complete(
+                    guild.banner.replace(size=1024, static_format="png").read()
+                )
+            except Exception:
+                banner_bytes = None
+            if banner_bytes:
+                try:
+                    banner = Image.open(io.BytesIO(banner_bytes)).convert("RGB")
+                    banner = banner.resize((width, height))
+                    image = banner.filter(ImageFilter.GaussianBlur(2.5))
+                except Exception:
+                    pass
+        elif guild.icon:
+            try:
+                icon_bytes = asyncio.get_event_loop().run_until_complete(
+                    guild.icon.replace(size=512, static_format="png").read()
+                )
+                icon = Image.open(io.BytesIO(icon_bytes)).convert("RGB")
+                icon = icon.resize((width, height))
+                image = icon.filter(ImageFilter.GaussianBlur(18))
+            except Exception:
+                pass
+
+        overlay = Image.new("RGBA", (width, height), (0, 0, 0, 135))
+        image = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
         draw = ImageDraw.Draw(image)
-        draw.rounded_rectangle((55, 55, size - 55, 620), radius=38, fill=(28, 24, 35), outline=(120, 74, 210), width=5)
+
         try:
-            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 110)
-            sub_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 42)
+            title_font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 116
+            )
+            server_font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48
+            )
+            count_font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 76
+            )
         except OSError:
-            title_font = ImageFont.load_default()
-            sub_font = ImageFont.load_default()
-        title = "روليت"
-        title_box = draw.textbbox((0, 0), title, font=title_font)
-        draw.text(((size - (title_box[2] - title_box[0])) / 2, 185), title, fill=(245, 245, 248), font=title_font)
-        subtitle = "اضغط على  🎮  للانضمام إلى اللعبة"
-        sub_box = draw.textbbox((0, 0), subtitle, font=sub_font)
-        draw.text(((size - (sub_box[2] - sub_box[0])) / 2, 345), subtitle, fill=(202, 194, 214), font=sub_font)
-        server_text = self.short_name(guild.name, 34)
-        server_box = draw.textbbox((0, 0), server_text, font=sub_font)
-        draw.text(((size - (server_box[2] - server_box[0])) / 2, 475), server_text, fill=(150, 126, 193), font=sub_font)
+            title_font = server_font = count_font = ImageFont.load_default()
+
+        def centered(text: str, y: int, font: ImageFont.ImageFont, fill):
+            box = draw.textbbox((0, 0), text, font=font)
+            x = (width - (box[2] - box[0])) / 2
+            draw.text((x, y), text, font=font, fill=fill)
+
+        centered("روليت", 105, title_font, (255, 255, 255))
+        centered(self.short_name(guild.name, 34), 260, server_font, (229, 223, 239))
+
+        count_text = f"{players} / {maximum}"
+        box = draw.textbbox((0, 0), count_text, font=count_font)
+        count_w = box[2] - box[0]
+        x1 = (width - count_w) / 2 - 42
+        x2 = (width + count_w) / 2 + 42
+        draw.rounded_rectangle(
+            (x1, 390, x2, 520),
+            radius=34,
+            fill=(22, 20, 29),
+            outline=(245, 245, 248),
+            width=4,
+        )
+        centered(count_text, 410, count_font, (255, 255, 255))
+
         buffer = io.BytesIO()
         image.save(buffer, "PNG", optimize=True)
         buffer.seek(0)
@@ -292,9 +314,15 @@ class RouletteMultiMessage(commands.Cog):
     async def update_lobby(self, session: Session, remaining: int = LOBBY_SECONDS):
         if not session.lobby_message:
             return
+        guild = self.bot.get_guild(session.guild_id)
+        if not guild:
+            return
         try:
-            await session.lobby_message.edit(embed=self.lobby_embed(session, remaining))
-        except discord.HTTPException:
+            file = self.make_lobby_art(guild, len(session.players), session.max_players)
+            embed = discord.Embed()
+            embed.set_image(url="attachment://roulette-lobby.png")
+            await session.lobby_message.edit(embed=embed, attachments=[file])
+        except (discord.HTTPException, discord.Forbidden):
             pass
 
     @commands.Cog.listener()
@@ -314,9 +342,10 @@ class RouletteMultiMessage(commands.Cog):
         self.sessions[key] = session
         webhook = await self.get_game_webhook(message.guild, message.channel)
         session.lobby_webhook = webhook
-        embed = self.lobby_embed(session, LOBBY_SECONDS)
+        embed = discord.Embed()
+        embed.set_image(url="attachment://roulette-lobby.png")
         view = LobbyView(self, session)
-        file = self.make_lobby_art(message.guild)
+        file = self.make_lobby_art(message.guild, 0, session.max_players)
         if webhook is not None:
             try:
                 session.lobby_message = await webhook.send(
