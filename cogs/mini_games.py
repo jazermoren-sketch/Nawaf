@@ -77,6 +77,18 @@ class MiniGames(commands.Cog):
         self.bot = bot
         self.active: dict[tuple[int, int], MiniRound] = {}
         self.handlers: dict[str, Callable] = {
+            # Official Arabic shortcuts used by Fizbo.
+            "-اسرع": self.fast_type,
+            "-زر": self.fast_click,
+            "-فكك": self.text_split,
+            "-ادمج": self.merge_text,
+            "-اعلام": self.guess_flag,
+            "-اعكس": self.text_reverse,
+            "-صحح": self.correct_letter,
+            "-ترتيب": self.sort_numbers,
+            "-لون": self.guess_color,
+            "-ايموجي": self.find_emoji,
+            # Existing English/transliterated aliases are kept for compatibility.
             "-فاستكليك": self.fast_click,
             "-fastclick": self.fast_click,
             "-فاستتايب": self.fast_type,
@@ -97,6 +109,10 @@ class MiniGames(commands.Cog):
             "-guesscolor": self.guess_color,
             "-خمنالايموجي": self.find_emoji,
             "-findemoji": self.find_emoji,
+            # Text Reveal's documented Arabic command.
+            "-اكشف الكلمة": self.text_reveal,
+            "-اكشفالكلمة": self.text_reveal,
+            "-textreveal": self.text_reveal,
         }
 
     def key(self, message: discord.Message) -> tuple[int, int]:
@@ -294,6 +310,25 @@ class MiniGames(commands.Cog):
             await self.finish(message, "✅ الإيموجي مطابق.", winner)
         else:
             await message.channel.send(f"⏱️ سالا الوقت. الإيموجي الصحيح هو {emoji}")
+
+    async def text_reveal(self, message: discord.Message):
+        word = random.choice(WORDS)
+        hidden = list("_" * len(word))
+        # Reveal a small number of letters while preserving the core mechanic:
+        # players submit the completed word one letter at a time.
+        reveal_count = max(1, len(word) // 4)
+        for index in random.sample(range(len(word)), reveal_count):
+            hidden[index] = word[index]
+        pattern = " ".join(hidden)
+        if self.begin(message, "text_reveal", word) is None:
+            return await message.channel.send("⚠️ كاين mini-game خدام دابا فهاد الروم.")
+        await self.start_embed(message, "🃏 Text Reveal", f"كمّل الكلمة وخمّنها.\n\n**`{pattern}`**")
+        winner = await self.winner_listener(message, lambda m: normalize(m.content) == normalize(word))
+        self.end(message)
+        if winner:
+            await self.finish(message, f"✅ الكلمة هي **{word}**.", winner)
+        else:
+            await message.channel.send(f"⏱️ سالا الوقت. الكلمة كانت **{word}**.")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
