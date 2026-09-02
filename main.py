@@ -32,6 +32,7 @@ COGS = (
     "cogs.game_restrictions",
     "cogs.roulette_multi_message",
     "cogs.premium",
+    "cogs.game_assets",
     "cogs.roulette_prefix_guard",
     "cogs.help",
     "cogs.admin_prefix",
